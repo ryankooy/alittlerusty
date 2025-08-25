@@ -5,10 +5,9 @@ use std::path::PathBuf;
 use clap::{Arg, Command, builder::PathBufValueParser};
 
 /*
- * Binary, octal, and hexadecimal conversions.
+ * Binary, octal, decimal, and hexadecimal conversions.
  */
 
-#[derive(Clone)]
 enum Numeral {
     Binary,
     Octal,
@@ -17,6 +16,7 @@ enum Numeral {
     Invalid,
 }
 
+#[derive(Clone)]
 struct NumeralInfo<'a> {
     name: &'a str,
     base: u32,
@@ -29,7 +29,7 @@ impl Numeral {
             "oct" | "octal" => Numeral::Octal,
             "" | "dec" | "decimal" => Numeral::Decimal,
             "hex" | "hexadecimal" => Numeral::Hexadecimal,
-            _ => Numeral::Invalid,
+            _ => Numeral::Invalid
         }
     }
 
@@ -39,73 +39,60 @@ impl Numeral {
             Numeral::Octal => Ok(NumeralInfo { name: "octal", base: 8 }),
             Numeral::Decimal => Ok(NumeralInfo { name: "decimal", base: 10 }),
             Numeral::Hexadecimal => Ok(NumeralInfo { name: "hexadecimal", base: 16 }),
-            Numeral::Invalid => Err("Invalid numeral type"),
+            Numeral::Invalid => Err("Invalid numeral type")
         }
     }
 }
 
 trait Number<'a> {
-    fn new(number: &'a str, numeral_type: &Numeral) -> Self;
-    fn value(&self, base: u32) -> Result<String, ParseIntError>;
-    fn print(&self);
+    fn new(number: &'a str, input_numeral_info: &'a NumeralInfo) -> Self;
+    fn value(&self) -> Result<String, ParseIntError>;
+    fn print(&self) -> Result<(), Box<dyn Error>>;
 }
 
 macro_rules! make_struct {
     ($name:ident, $numtype:expr, $fmtstr:expr) => {
         struct $name<'a> {
             number: &'a str,
-            numeral_type: Numeral,
-            input_numeral_type: Numeral,
+            numeral_info: NumeralInfo<'a>,
+            input_numeral_info: NumeralInfo<'a>,
         }
 
         impl <'a> Number<'a> for $name<'a> {
-            fn new(number: &'a str, numeral_type: &Numeral) -> $name<'a> {
-                $name {
-                    number: number,
-                    numeral_type: $numtype,
-                    input_numeral_type: numeral_type.clone(),
+            fn new(number: &'a str, input_numeral_info: &'a NumeralInfo) -> $name<'a> {
+                let numeral_info: NumeralInfo = $numtype.info().unwrap();
+                let input_numeral_info: NumeralInfo = input_numeral_info.clone();
+
+                $name { number, numeral_info, input_numeral_info }
+            }
+
+            fn value(&self) -> Result<String, ParseIntError> {
+                match i128::from_str_radix(self.number, self.input_numeral_info.base) {
+                    Ok(value) => Ok(format!($fmtstr, value)),
+                    Err(e) => Err(e)
                 }
             }
 
-            fn value(&self, base: u32) -> Result<String, ParseIntError> {
-                match i128::from_str_radix(self.number, base) {
-                    Ok(value) => {
-                        Ok(format!($fmtstr, value))
-                    }
-                    Err(e) => {
-                        Err(e)
-                    }
-                }
-            }
-
-            fn print(&self) {
-                let numinfo = self.numeral_type.info().unwrap();
-                let inuminfo = match self.input_numeral_type.info() {
-                    Ok(info) => info,
-                    Err(e) => {
-                        panic!("{}", e);
-                    },
-                };
-
-                match self.value(inuminfo.base) {
+            fn print(&self) -> Result<(), Box<dyn Error>> {
+                match self.value() {
                     Ok(value) => {
                         println!(
-                            "{value}  <- Base {base} ({numtype}) of {inumtype} number {num}",
+                            "{value}  <- {numtype} (base {base})",
                             value=value.to_string(),
-                            num=self.number,
-                            numtype=numinfo.name,
-                            inumtype=inuminfo.name,
-                            base=numinfo.base,
+                            numtype=capitalize(self.numeral_info.name),
+                            base=self.numeral_info.base
                         );
                     }
                     Err(e) => {
-                        panic!(
-                            "Invalid {inumtype} value: {error}",
-                            inumtype=inuminfo.name,
-                            error=e.to_string(),
-                        );
+                        return Err(
+                            format!(
+                                "Invalid {} value: {}", self.input_numeral_info.name, e.to_string()
+                            ).into()
+                        )
                     }
                 }
+
+                Ok(())
             }
         }
     };
@@ -120,16 +107,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = parse_config()?;
     let number: &str = config.number.as_str();
     let numeral_type = Numeral::new(config.numeral_type.as_str());
+    let numeral_info: NumeralInfo = numeral_type.info()?;
 
-    let decimal: Decimal = Number::new(&number, &numeral_type);
-    let binary: Binary = Number::new(&number, &numeral_type);
-    let octal: Octal = Number::new(&number, &numeral_type);
-    let hex: Hex = Number::new(&number, &numeral_type);
+    print_number_info(&number, &numeral_info);
 
-    decimal.print();
-    binary.print();
-    octal.print();
-    hex.print();
+    let binary: Binary = Number::new(&number, &numeral_info);
+    let octal: Octal = Number::new(&number, &numeral_info);
+    let decimal: Decimal = Number::new(&number, &numeral_info);
+    let hex: Hex = Number::new(&number, &numeral_info);
+
+    binary.print()?;
+    octal.print()?;
+    decimal.print()?;
+    hex.print()?;
 
     Ok(())
 }
@@ -162,9 +152,24 @@ fn parse_config() -> Result<Config, &'static str> {
     let number_str: Option<&String> = matches.get_one("number");
     match number_str {
         None => Err("Number argument required"),
-        Some(s) => {
-            let number = String::from(s);
+        Some(n) => {
+            let number = String::from(n);
             Ok(Config { number, numeral_type })
         }
+    }
+}
+
+fn print_number_info<'a>(number: &'a str, numeral_info: &'a NumeralInfo) {
+    let numeral_info: NumeralInfo = numeral_info.clone();
+    let numeral_type: String = capitalize(numeral_info.name);
+
+    println!("{} number {} (base {})\n", numeral_type, number, numeral_info.base);
+}
+
+fn capitalize<'a>(word: &'a str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str()
     }
 }
