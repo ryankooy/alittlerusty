@@ -1,28 +1,42 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs;
-use std::io::{Error, ErrorKind};
+use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-fn main() {
-    let source_dir = "/home/ranky/synced/";
+use clap::{self, Arg};
 
-    let dest_eins = HashMap::from([
+fn main() -> Result<(), Box<dyn Error>> {
+    let cfg = parse_config()?;
+    let source_dir: String = format!("/home/{}/synced/", cfg.user);
+
+    // Google Drive
+    let dest_gd = HashMap::from([
         ("mp", "/mnt/g"),
         ("drv", "G:"),
         ("dir", "/mnt/g/My Drive/synced/"),
         ("desc", "Google Drive")
     ]);
 
-    let dest_zwei = HashMap::from([
-        ("mp", "/mnt/i"),
-        ("drv", "I:"),
-        ("dir", "/mnt/i/synced/"),
+    // Get external SSD "Redkid" info
+    let letter: String = cfg.drive_letter.to_lowercase();
+    let mp_ot: String = format!("/mnt/{}", &letter);
+    let drv_ot: String = format!("{}:", &letter.to_uppercase());
+    let dir_ot: String = format!("/mnt/{}/synced/", &letter);
+
+    // Redkid
+    let dest_ot = HashMap::from([
+        ("mp", mp_ot.as_str()),
+        ("drv", drv_ot.as_str()),
+        ("dir", dir_ot.as_str()),
         ("desc", "Redkid")
     ]);
 
-    let mut dest_dirs = vec![dest_eins, dest_zwei];
+    let mut dest_dirs = vec![dest_gd, dest_ot];
 
+    // Iterate destination drives and try to mount and sync
+    // them with local source directory
     for dest in dest_dirs.iter_mut() {
         let mp: &str = dest.get("mp").unwrap();
 
@@ -62,7 +76,7 @@ fn main() {
         // Print dry-run output of sync with local source directory
         let dry_run_rsync = Command::new("rsync")
             .args(["-a", "--itemize-changes", "--update", "--dry-run"])
-            .args([source_dir, dir])
+            .args([source_dir.as_str(), dir])
             .output();
 
         if is_success(&dry_run_rsync) {
@@ -80,8 +94,9 @@ fn main() {
             continue;
         }
 
+        // Sync drive with local source directory
         let rsync_from_local = Command::new("rsync")
-            .args(["-a", "--update", source_dir, dir])
+            .args(["-a", "--update", source_dir.as_str(), dir])
             .output();
 
         if is_success(&rsync_from_local) {
@@ -93,6 +108,8 @@ fn main() {
         }
     }
 
+    // Iterate destination drives again and try to sync
+    // them with each other
     for dest in dest_dirs.iter() {
         if dest.get("err").is_some() {
             continue;
@@ -113,7 +130,10 @@ fn main() {
                 if is_success(&rsync) {
                     let output = &rsync.unwrap();
                     let rsync_output = String::from_utf8_lossy(&output.stdout);
-                    println!("{}", rsync_output);
+
+                    if !rsync_output.is_empty() {
+                        println!("{}", rsync_output);
+                    }
 
                     let other_desc: &str = other_dest.get("desc").unwrap();
                     println!(">>> Synced {} with {}", other_desc, desc);
@@ -124,10 +144,46 @@ fn main() {
         }
     }
 
-    println!("End"); //TODO: REMOVE
+    println!("That's all, folks!"); //TODO: REMOVE
+    Ok(())
 }
 
-fn is_success(output: &Result<Output, Error>) -> bool {
+struct Config {
+    user: String,
+    drive_letter: String,
+}
+
+fn parse_config() -> Result<Config, &'static str> {
+    let matches = clap::Command::new("Drive Syncer")
+        .about("Sync between drives")
+        .arg(Arg::new("user")
+                .short('u')
+                .long("user")
+                .help("System username"))
+        .arg(Arg::new("drive-letter")
+                .short('l')
+                .long("drive-letter")
+                .help("External drive identifying letter"))
+        .get_matches();
+
+    let user: Option<&String> = matches.get_one("user");
+    if user.is_none() {
+        return Err("Argument required for --user");
+    }
+
+    let letter: Option<&String> = matches.get_one("drive-letter");
+    if letter.is_none() {
+        return Err("Argument required for --drive-letter");
+    }
+
+    Ok(Config {
+        user: user.unwrap().to_string(),
+        drive_letter: letter.unwrap().to_string(),
+    })
+}
+
+
+fn is_success(output: &Result<Output, io::Error>) -> bool {
     let mut success: bool = false;
 
     match output {
