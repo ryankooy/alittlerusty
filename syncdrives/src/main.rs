@@ -4,18 +4,22 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::string::String;
 
 use clap::{self, Arg};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cfg = parse_config()?;
-    let source_dir: String = format!("/home/{}/synced/", cfg.user);
+    let user: &str = cfg.user.as_str();
+
+    let base_src_dir_string: String = format!("/home/{}", user);
+    let base_src_dir: &str = base_src_dir_string.as_str();
 
     // Google Drive
     let dest_gd = HashMap::from([
         ("mp", "/mnt/g"),
         ("drv", "G:"),
-        ("dir", "/mnt/g/My Drive/synced/"),
+        ("dir", "/mnt/g/My Drive"),
         ("desc", "Google Drive")
     ]);
 
@@ -23,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let letter: String = cfg.drive_letter.to_lowercase();
     let mp_ot: String = format!("/mnt/{}", &letter);
     let drv_ot: String = format!("{}:", &letter.to_uppercase());
-    let dir_ot: String = format!("/mnt/{}/synced/", &letter);
+    let dir_ot: String = mp_ot.clone();
 
     // Redkid
     let dest_ot = HashMap::from([
@@ -34,9 +38,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     ]);
 
     let mut dest_dirs = vec![dest_gd, dest_ot];
+    let subdirs = vec!["bin", "docs", "scripts", "synced"];
 
-    // Iterate destination drives and try to mount and sync
-    // them with local source directory
+    // Iterate destination drives and try to mount them and sync their
+    // directories with local ones
     for dest in dest_dirs.iter_mut() {
         let mp: &str = dest.get("mp").unwrap();
 
@@ -71,60 +76,69 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        let dir: &str = dest.get("dir").unwrap();
+        let base_dest_dir: &str = dest.get("dir").unwrap();
 
-        // Print dry-run output of sync with local source directory
-        let dry_run_rsync = Command::new("rsync")
-            .args(["-a", "--itemize-changes", "--update", "--dry-run"])
-            .args([source_dir.as_str(), dir])
-            .output();
+        // Sync with local subdirectories
+        for subdir in subdirs.iter() {
+            let src_dir_string: String = format!("{}/{}/", base_src_dir, subdir);
+            let src_dir: &str = src_dir_string.as_str();
 
-        if is_success(&dry_run_rsync) {
-            let output = &dry_run_rsync.unwrap();
-            let dry_run_rsync_output = String::from_utf8_lossy(&output.stdout);
+            let dest_dir_string: String = format!("{}/wsl/{}/{}/", base_dest_dir, user, subdir);
+            let dest_dir: &str = dest_dir_string.as_str();
 
-            for line in dry_run_rsync_output.lines() {
-                if line.starts_with(">") {
-                    println!("{}", line);
-                }
-            }
-        } else {
-            eprintln!("Could not sync {} with local directory", dir);
-            dest.insert("err", "sync-err");
-            continue;
-        }
+            // Try to create subdirectory path
+            let _ = fs::create_dir_all(dest_dir);
 
-        // Sync drive with local source directory
-        let rsync_from_local = Command::new("rsync")
-            .args(["-a", "--update", source_dir.as_str(), dir])
-            .output();
-
-        if is_success(&rsync_from_local) {
             let desc: &str = dest.get("desc").unwrap();
-            println!(">>> Synced {} with local directory", desc);
-        } else {
-            eprintln!("Could not sync {} with local directory", dir);
-            dest.insert("err", "sync-err");
+            println!("\nLocal {}/ -> {} {}/", subdir, desc, subdir);
+
+            // Sync with local subdirectory
+            let rsync = Command::new("rsync")
+                .args(["-a", "--no-links", "--itemize-changes", "--update"])
+                .args([src_dir, dest_dir])
+                .output();
+
+            if is_success(&rsync) {
+                let output = &rsync.unwrap();
+                let rsync_output = String::from_utf8_lossy(&output.stdout);
+
+                for line in rsync_output.lines() {
+                    if line.starts_with(">") {
+                        println!("{}", line);
+                    }
+                }
+
+                println!("Synced {} with {}", dest_dir, src_dir);
+            } else {
+                eprintln!("Could not sync {} with {}", dest_dir, src_dir);
+                dest.insert("err", "sync-err");
+                break;
+            }
         }
     }
 
-    // Iterate destination drives again and try to sync
-    // them with each other
+    // Iterate destination drives again and try to sync their
+    // synced/ directories with each other
     for dest in dest_dirs.iter() {
         if dest.get("err").is_some() {
             continue;
         }
 
-        let dir: &str = dest.get("dir").unwrap();
-        let desc: &str = dest.get("desc").unwrap();
+        let src_sync_dir_string: String = format!("{}/wsl/{}/synced/", dest.get("dir").unwrap(), user);
+        let src_sync_dir: &str = src_sync_dir_string.as_str();
+        let src_desc: &str = dest.get("desc").unwrap();
 
         for other_dest in dest_dirs.iter() {
-            let other_dir: &str = other_dest.get("dir").unwrap();
+            let dest_sync_dir_string: String = format!("{}/wsl/{}/synced/", other_dest.get("dir").unwrap(), user);
+            let dest_sync_dir: &str = dest_sync_dir_string.as_str();
 
-            if other_dir != dir && other_dest.get("err").is_none() {
+            if dest_sync_dir != src_sync_dir && other_dest.get("err").is_none() {
+                let dest_desc: &str = other_dest.get("desc").unwrap();
+                println!("\n{} synced/ -> {} synced/", src_desc, dest_desc);
+
                 let rsync = Command::new("rsync")
-                    .args(["-irlD", "--ignore-existing"])
-                    .args([dir, other_dir])
+                    .args(["--itemize-changes", "--recursive", "--ignore-existing"])
+                    .args([src_sync_dir, dest_sync_dir])
                     .output();
 
                 if is_success(&rsync) {
@@ -135,16 +149,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                         println!("{}", rsync_output);
                     }
 
-                    let other_desc: &str = other_dest.get("desc").unwrap();
-                    println!(">>> Synced {} with {}", other_desc, desc);
+                    println!("Synced {} with {}", dest_sync_dir, src_sync_dir);
                 } else {
-                    eprintln!("Could not sync {} with {}", other_dir, dir);
+                    eprintln!("Could not sync {} with {}", dest_sync_dir, src_sync_dir);
                 }
             }
         }
     }
 
-    println!("That's all, folks!"); //TODO: REMOVE
     Ok(())
 }
 
@@ -181,7 +193,6 @@ fn parse_config() -> Result<Config, &'static str> {
         drive_letter: letter.unwrap().to_string(),
     })
 }
-
 
 fn is_success(output: &Result<Output, io::Error>) -> bool {
     let mut success: bool = false;
