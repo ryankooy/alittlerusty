@@ -1,16 +1,34 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::string::String;
 
-use clap::{self, Arg, builder::PathBufValueParser};
+// Run `cargo add clap --features derive`
+use clap::{self, Parser};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let cfg = parse_config()?;
-    let user: &str = cfg.user.as_str();
+#[derive(Parser)]
+#[command(name = "Drive Syncer")]
+#[command(about = "Sync between drives", long_about = None)]
+struct Cli {
+    /// System username
+    #[arg(short, long, value_name = "USER")]
+    user: String,
+
+    /// External drive's identifying letter
+    #[arg(short = 'l', long, value_name = "LETTER")]
+    drive_letter: Option<String>,
+
+    /// Perform dry-run sync only
+    #[arg(short, long)]
+    dry_run: bool,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let user: String = cli.user;
+    let dry_run: bool = cli.dry_run;
 
     let base_src_dir_string: String = format!("/home/{}", user);
     let base_src_dir: &str = base_src_dir_string.as_str();
@@ -24,15 +42,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     ]);
 
     let mut dest_dirs = vec![dest_gdrv];
-    let sync_external: bool = !cfg.drive_letter.is_empty();
+    let sync_all: bool = !cli.drive_letter.is_none();
 
     // Get external SSD "Redkid" info
-    let letter: String = cfg.drive_letter.to_lowercase();
-    let mp_extl: String = format!("/mnt/{}", &letter);
-    let drv_extl: String = format!("{}:", &letter.to_uppercase());
-    let dir_extl: String = mp_extl.clone();
+    let (mp_extl, drv_extl, dir_extl) = if let Some(letter) = cli.drive_letter.as_deref() {
+        let mp: String = format!("/mnt/{}", &letter);
+        let drv: String = format!("{}:", &letter.to_uppercase());
+        let dir: String = mp.clone();
+        (mp, drv, dir)
+    } else {
+        (String::new(), String::new(), String::new())
+    };
 
-    if sync_external {
+    if sync_all {
         // Redkid
         let dest_extl = HashMap::from([
             ("mp", mp_extl.as_str()),
@@ -45,6 +67,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let subdirs = vec!["bin", "docs", "scripts", "synced"];
+    let mut rsync_opts = vec!["-a", "--no-links", "--itemize-changes", "--update"];
+    let mut rsync_synced_dir_opts = vec!["--itemize-changes", "--recursive", "--ignore-existing"];
+
+    if dry_run {
+        println!("Dry-run sync");
+        rsync_opts.push("--dry-run");
+        rsync_synced_dir_opts.push("--dry-run");
+    }
 
     // Iterate destination drives and try to mount them and sync their
     // directories with local ones
@@ -83,7 +113,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let base_dest_dir: &str = dest.get("dir").unwrap();
-
         // Sync with local subdirectories
         for subdir in subdirs.iter() {
             let src_dir_string: String = format!("{}/{}/", base_src_dir, subdir);
@@ -100,7 +129,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             // Sync with local subdirectory
             let rsync = Command::new("rsync")
-                .args(["-a", "--no-links", "--itemize-changes", "--update"])
+                .args(&rsync_opts)
                 .args([src_dir, dest_dir])
                 .output();
 
@@ -114,7 +143,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
 
-                println!("Synced {} with {}", dest_dir, src_dir);
+                if dry_run {
+                    println!("Would sync {} with {}", dest_dir, src_dir);
+                } else {
+                    println!("Synced {} with {}", dest_dir, src_dir);
+                }
             } else {
                 eprintln!("Could not sync {} with {}", dest_dir, src_dir);
                 dest.insert("err", "sync-err");
@@ -123,7 +156,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if sync_external {
+    if sync_all {
         // Iterate destination drives again and try to sync their
         // synced/ directories with each other
         for dest in dest_dirs.iter() {
@@ -144,7 +177,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("\n{} synced/ -> {} synced/", src_desc, dest_desc);
 
                     let rsync = Command::new("rsync")
-                        .args(["--itemize-changes", "--recursive", "--ignore-existing"])
+                        .args(&rsync_synced_dir_opts)
                         .args([src_sync_dir, dest_sync_dir])
                         .output();
 
@@ -156,7 +189,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             println!("{}", rsync_output);
                         }
 
-                        println!("Synced {} with {}", dest_sync_dir, src_sync_dir);
+                        if dry_run {
+                            println!("Would sync {} with {}", dest_sync_dir, src_sync_dir);
+                        } else {
+                            println!("Synced {} with {}", dest_sync_dir, src_sync_dir);
+                        }
                     } else {
                         eprintln!("Could not sync {} with {}", dest_sync_dir, src_sync_dir);
                     }
@@ -164,41 +201,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-
-    Ok(())
-}
-
-struct Config {
-    user: String,
-    drive_letter: String,
-}
-
-fn parse_config() -> Result<Config, &'static str> {
-    let matches = clap::Command::new("Drive Syncer")
-        .about("Sync between drives")
-        .arg(Arg::new("user")
-                .short('u')
-                .long("user")
-                .help("System username"))
-        .arg(Arg::new("drive-letter")
-                .short('l')
-                .long("drive-letter")
-                .help("External drive identifying letter")
-                .value_parser(PathBufValueParser::default()))
-        .get_matches();
-
-    let user_arg: Option<&String> = matches.get_one("user");
-    if user_arg.is_none() {
-        return Err("Argument required for --user");
-    }
-
-    let user: String = user_arg.unwrap().to_string();
-    let drive_letter: String = matches.get_one("drive-letter")
-        .unwrap_or(&PathBuf::new())
-        .display()
-        .to_string();
-
-    Ok(Config { user, drive_letter })
 }
 
 fn is_success(output: &Result<Output, io::Error>) -> bool {
