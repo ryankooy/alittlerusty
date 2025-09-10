@@ -29,6 +29,10 @@ fn main() {
     let cli = Cli::parse();
     let base_src_dir = format!("/home/{}", cli.user);
     let subdirs = vec!["bin", "docs", "scripts", "synced"];
+    let hidden_files = vec![
+        ".bash_aliases", ".bashrc", ".config/nvim/init.vim", ".gitconfig",
+        ".profile", ".tmux.conf", ".tmuxp.yaml"
+    ];
     let mut sync_all: bool = false;
 
     // Google Drive
@@ -77,7 +81,7 @@ fn main() {
             continue;
         }
 
-        if let Err(e) = sync_dirs_with_local(&dest, &subdirs, base_src_dir.as_str(), &cli) {
+        if let Err(e) = sync_dirs_with_local(&dest, &subdirs, base_src_dir.as_str(), &hidden_files, &cli) {
             eprintln!("{}", e);
             dest.insert("err", "sync-err");
             break;
@@ -99,7 +103,7 @@ fn main() {
                         if dest_sync_dir != src_sync_dir {
                             let dest_desc: &str = dest.get("desc").unwrap();
 
-                            if let Err(e) = sync_between(
+                            if let Err(e) = sync_dir(
                                 src_sync_dir.as_str(),
                                 dest_sync_dir.as_str(),
                                 src_desc,
@@ -156,6 +160,7 @@ fn sync_dirs_with_local(
     dest: &HashMap<&str, &str>,
     subdirs: &Vec<&str>,
     base_src_dir: &str,
+    hidden_files: &Vec<&str>,
     cli: &Cli,
 ) -> Result<(), Error> {
     let mut rsync_opts = vec!["-a", "--no-links", "--itemize-changes", "--update"];
@@ -167,18 +172,19 @@ fn sync_dirs_with_local(
     let base_dest_dir: &str = dest.get("dir").unwrap();
     let dest_desc: &str = dest.get("desc").unwrap();
 
+    // Sync hidden files
+    if let Err(e) = copy_hidden_files(base_src_dir, base_dest_dir, dest_desc, &hidden_files, cli) {
+        return Err(e);
+    }
+
     // Sync with local subdirectories
     for subdir in subdirs.iter() {
         let src_dir = format!("{}/{}/", base_src_dir, subdir);
         let dest_dir = format!("{}/wsl/{}/{}/", base_dest_dir, cli.user, subdir);
-        let rsync = sync_dir(src_dir.as_str(), dest_dir.as_str(), "Local", dest_desc, subdir, &rsync_opts);
+        let rsync = run_rsync(src_dir.as_str(), dest_dir.as_str(), "Local", dest_desc, subdir, &rsync_opts);
 
         if is_success(&rsync) {
-            for line in get_stdout(&rsync).lines() {
-                if line.starts_with(">") {
-                    println!("{}", line);
-                }
-            }
+            print_rsync_output_lines(&rsync);
 
             if cli.dry_run {
                 println!("Would sync {} with {}", dest_dir, src_dir);
@@ -194,7 +200,7 @@ fn sync_dirs_with_local(
     Ok(())
 }
 
-fn sync_between(
+fn sync_dir(
     src_dir: &str,
     dest_dir: &str,
     src_desc: &str,
@@ -207,11 +213,10 @@ fn sync_between(
         rsync_opts.push("--dry-run");
     }
 
-    let rsync = sync_dir(src_dir, dest_dir, src_desc, dest_desc, "synced", &rsync_opts);
+    let rsync = run_rsync(src_dir, dest_dir, src_desc, dest_desc, "synced", &rsync_opts);
 
     if is_success(&rsync) {
         let output = get_stdout(&rsync);
-
         if !output.is_empty() {
             println!("{}", output);
         }
@@ -229,7 +234,32 @@ fn sync_between(
     Ok(())
 }
 
-fn sync_dir(
+fn copy_hidden_files(
+    src_dir: &str,
+    base_dest_dir: &str,
+    dest_desc: &str,
+    files: &Vec<&str>,
+    cli: &Cli,
+) -> Result<(), Error> {
+    let dest_dir = format!("{}/wsl/{}/", base_dest_dir, cli.user);
+
+    if cli.dry_run {
+        println!("Would copy hidden files from {}/ to {}", src_dir, dest_dir);
+    } else {
+        let cp = run_cp_hidden_files(src_dir, dest_dir.as_str(), dest_desc, files);
+
+        if is_success(&cp) {
+            println!("Copied hidden files from {}/ to {}", src_dir, dest_dir);
+        } else {
+            let err_msg = format!("Could not copy hidden files from {}/ to {}", src_dir, dest_dir);
+            return Err(Error::new(ErrorKind::Other, err_msg));
+        }
+    }
+
+    Ok(())
+}
+
+fn run_rsync(
     src_dir: &str,
     dest_dir: &str,
     src_desc: &str,
@@ -249,9 +279,36 @@ fn sync_dir(
             .output()
 }
 
+fn run_cp_hidden_files(
+    src_dir: &str,
+    dest_dir: &str,
+    dest_desc: &str,
+    files: &Vec<&str>,
+) -> Result<Output, Error> {
+    println!("\nLocal hidden files -> {}", dest_desc);
+    println!("{}", files.join(", "));
+
+    let mut hidden_files: Vec<String> = Vec::new();
+    for filename in files.iter() {
+        let path = format!("{}/{}", src_dir, filename);
+        hidden_files.push(path);
+    }
+
+    // Run cp command
+    Command::new("cp").args(hidden_files).arg(dest_dir).output()
+}
+
 fn get_stdout(output: &Result<Output, Error>) -> String {
     let out = output.as_ref().unwrap();
     String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn print_rsync_output_lines(output: &Result<Output, Error>) {
+    for line in get_stdout(output).lines() {
+        if line.starts_with(">") {
+            println!("{}", line);
+        }
+    }
 }
 
 fn is_success(output: &Result<Output, Error>) -> bool {
