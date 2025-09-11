@@ -41,9 +41,6 @@ async fn main() -> io::Result<()> {
         }
     }
 
-    let now = Instant::now();
-    let waiting: Vec<&str> = ["★    ", "  ★  ", "    ★"].to_vec();
-
     let (tx, mut rx) = sync::mpsc::channel::<Command>(100);
 
     // Key handler
@@ -68,6 +65,7 @@ async fn main() -> io::Result<()> {
         }
     });
 
+    let waiting: Vec<&str> = ["★    ", "  ★  ", "    ★"].to_vec();
     let mut state = LoopState::new();
     let mut interval = tokio::time::interval(Duration::from_millis(50));
 
@@ -84,6 +82,13 @@ async fn main() -> io::Result<()> {
             _ = interval.tick() => {
                 if state.is_fresh {
                     clear_line(&mut stdout, y_pos - 1);
+
+                    if state.is_paused {
+                        let hours: f64 = state.get_hours();
+                        let seconds: u64 = state.get_seconds();
+                        println!("Paused at {:.2} hours, {} seconds", hours, seconds);
+                        write_file(hours)?;
+                    }
                 }
 
                 if !state.is_paused {
@@ -100,25 +105,21 @@ async fn main() -> io::Result<()> {
                     //println!("{} minutes", min);
                     //let _ = time::sleep(Duration::from_millis(1000));
                     //clear_line(&mut stdout, y_pos - 1);
-                } else if state.is_fresh {
-                    let hours: f64 = now.elapsed().as_secs_f64() / 3600.0;
-                    println!("Paused at {:.2} hours", hours);
-                    write_file(hours)?;
                 }
             }
         }
     }
 
-    // Clean up
     input_handle.abort();
-
     let _ = io::stdin().lock().read_line();
-
     (1..=2).for_each(|i| clear_line(&mut stdout, y_pos - i));
 
-    let total_hours: f64 = now.elapsed().as_secs_f64() / 3600.0;
+    state.update_time();
+    let total_hours: f64 = state.get_hours();
+    let total_seconds: u64 = state.get_seconds();
+
     write_file(total_hours)?;
-    println!("Total hours: {:.2}", total_hours);
+    println!("Total hours: {:.2}, seconds: {}", total_hours, total_seconds);
 
     write!(stdout, "{}", cursor::Show)?;
     clear_line(&mut stdout, y_pos - 1);
@@ -129,7 +130,9 @@ async fn main() -> io::Result<()> {
 struct LoopState {
     is_paused: bool,
     is_fresh: bool,
+    start: Instant,
     hours: f64,
+    seconds: u64,
 }
 
 impl LoopState {
@@ -137,23 +140,49 @@ impl LoopState {
         Self {
             is_paused: false,
             is_fresh: false,
+            start: Instant::now(),
             hours: 0.0f64,
+            seconds: 0u64,
         }
     }
 
     fn toggle_pause(&mut self) {
         self.is_paused = !self.is_paused;
         self.is_fresh = true;
+        self.update_start();
     }
 
     fn pause(&mut self) {
         self.is_fresh = !self.is_paused;
         self.is_paused = true;
+        self.update_start();
     }
 
     fn resume(&mut self) {
         self.is_fresh = self.is_paused;
         self.is_paused = false;
+    }
+
+    fn get_hours(&mut self) -> f64 {
+        self.hours
+    }
+
+    fn get_seconds(&mut self) -> u64 {
+        self.seconds
+    }
+
+    fn update_start(&mut self) {
+        if self.is_paused && self.is_fresh {
+            self.update_time();
+            self.start = Instant::now();
+        }
+    }
+
+    fn update_time(&mut self) {
+        let hours: f64 = self.start.elapsed().as_secs_f64() / 3600.0;
+        let seconds: u64 = self.start.elapsed().as_secs();
+        self.hours += hours;
+        self.seconds += seconds;
     }
 }
 
