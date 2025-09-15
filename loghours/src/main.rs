@@ -103,10 +103,15 @@ async fn main() -> io::Result<()> {
     input_handle.abort();
     (0..=1).for_each(|i| clear_line(&mut stdout, start_line - i));
 
-    let total_hours: f64 = state.get_total_hours();
-    write_file(&cli.filepath, total_hours)?;
+    let hours: f64 = state.get_total_hours();
 
-    println!("Total hours: {:.2}", total_hours);
+    if hours >= 0.01 {
+        write_file(&cli.filepath, hours)?;
+        println!("Hours logged: {:.2}", hours);
+    } else {
+        println!("No hours logged");
+    }
+
     write!(stdout, "{}", cursor::Show)?;
     clear_line(&mut stdout, start_line);
 
@@ -123,7 +128,7 @@ fn clear_line(stdout: &mut RawTerminal<Stdout>, line: u16) {
     stdout.flush().unwrap();
 }
 
-fn write_file(filepath: &Option<String>, time_elapsed: f64) -> io::Result<()> {
+fn write_file(filepath: &Option<String>, hours: f64) -> io::Result<()> {
     if let Some(f) = filepath {
         if !Path::new(&f).exists() {
             let _ = File::create(f)?;
@@ -135,7 +140,7 @@ fn write_file(filepath: &Option<String>, time_elapsed: f64) -> io::Result<()> {
             .open(f)?;
 
         let date = Local::now().format("%Y-%m-%d").to_string();
-        writeln!(file, "{} {:.2}", date, time_elapsed)?;
+        writeln!(file, "{} {:.2}", date, hours)?;
     }
 
     Ok(())
