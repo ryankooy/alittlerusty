@@ -9,7 +9,10 @@ use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
 use tokio::{sync, task};
-use tokio::time::{Duration, Instant};
+use tokio::time::Duration;
+
+mod loopstate;
+use loopstate::{Command, State as LoopState};
 
 #[derive(Parser)]
 #[command(name = "Hour Logger")]
@@ -18,14 +21,6 @@ struct Cli {
     /// Path of file to which to log hours
     #[arg(short, long, value_name = "FILEPATH")]
     filepath: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Command {
-    Pause,
-    TogglePause,
-    Resume,
-    Quit,
 }
 
 #[tokio::main]
@@ -39,16 +34,6 @@ async fn main() -> io::Result<()> {
     write!(stdout, "{}", cursor::Hide)?;
     stdout.flush()?;
 
-    // Detect keydown events
-    for k in io::stdin().keys() {
-        match k.unwrap() {
-            Key::Char('s') | Key::Char('S') => {
-                break;
-            },
-            _ => (),
-        }
-    }
-
     let (tx, mut rx) = sync::mpsc::channel::<Command>(100);
 
     // Key handler
@@ -58,9 +43,10 @@ async fn main() -> io::Result<()> {
 
         while let Some(Ok(key)) = keys.next() {
             let command = match key {
-                Key::Char(' ') => Some(Command::TogglePause),
+                Key::Char('s') => Some(Command::Start),
                 Key::Char('p') => Some(Command::Pause),
                 Key::Char('r') => Some(Command::Resume),
+                Key::Char(' ') => Some(Command::TogglePause),
                 Key::Char('q') | Key::Ctrl('c') => Some(Command::Quit),
                 _ => None,
             };
@@ -75,43 +61,46 @@ async fn main() -> io::Result<()> {
 
     let mut state = LoopState::new();
     let mut interval = tokio::time::interval(Duration::from_millis(50));
+    let mut counter: u64 = 0;
 
     loop {
         tokio::select! {
             cmd = rx.recv() => {
                 match cmd {
-                    Some(Command::TogglePause) => state.toggle_pause(),
+                    Some(Command::Start) => state.start(),
                     Some(Command::Pause) => state.pause(),
                     Some(Command::Resume) => state.resume(),
+                    Some(Command::TogglePause) => state.toggle_pause(),
                     Some(Command::Quit) => {
-                        state.update_time();
-                        break
+                        state.quit();
+                        break;
                     }
                     None => break,
                 }
             }
             _ = interval.tick() => {
-                clear_line(&mut stdout, start_line);
-                if state.is_paused {
-                    println!("Paused at {:.2} total hours", state.get_total_hours());
-                } else {
-                    if state.counter == u64::MAX {
-                        state.counter = 0;
+                if state.is_running() {
+                    clear_line(&mut stdout, start_line);
+                    if state.is_paused() {
+                        println!("Paused at {:.2} hours", state.get_total_hours());
+                    } else {
+                        if counter == u64::MAX {
+                            counter = 0;
+                        }
+                        counter += 1;
+                        println!(
+                            "{} min {}\r",
+                            state.get_total_minutes(),
+                            "★".repeat((counter % 20) as usize + 1)
+                        );
+                        clear_line(&mut stdout, start_line + 1);
                     }
-                    state.counter += 1;
-                    println!(
-                        "{} min {}\r",
-                        state.get_total_minutes(),
-                        "★".repeat((state.counter % 20) as usize + 1)
-                    );
-                    clear_line(&mut stdout, start_line + 1);
                 }
             }
         }
     }
 
     input_handle.abort();
-    let _ = io::stdin().lock().read_line();
     (0..=1).for_each(|i| clear_line(&mut stdout, start_line - i));
 
     let total_hours: f64 = state.get_total_hours();
@@ -122,92 +111,6 @@ async fn main() -> io::Result<()> {
     clear_line(&mut stdout, start_line);
 
     Ok(())
-}
-
-struct LoopState {
-    is_paused: bool,
-    was_paused: bool,
-    start: Instant,
-    hours: f64,
-    minutes: u64,
-    counter: u64,
-}
-
-impl LoopState {
-    fn new() -> Self {
-        Self {
-            is_paused: false,
-            was_paused: false,
-            start: Instant::now(),
-            hours: 0.0,
-            minutes: 0,
-            counter: 0,
-        }
-    }
-
-    fn toggle_pause(&mut self) {
-        self.is_paused = !self.is_paused;
-        if self.is_paused {
-            self.update_time();
-            self.was_paused = true;
-        } else {
-            self.reset_start();
-        }
-    }
-
-    fn pause(&mut self) {
-        if !self.is_paused {
-            self.update_time();
-            self.is_paused = true;
-            self.was_paused = true;
-        }
-    }
-
-    fn resume(&mut self) {
-        if self.is_paused {
-            self.reset_start();
-            self.is_paused = false;
-        }
-    }
-
-    fn get_hours(&mut self) -> f64 {
-        self.start.elapsed().as_secs_f64() / 3600.0
-    }
-
-    fn get_minutes(&mut self) -> u64 {
-        self.start.elapsed().as_secs() / 60
-    }
-
-    fn get_total_hours(&mut self) -> f64 {
-        if !self.was_paused {
-            self.update_hours();
-        }
-        self.hours
-    }
-
-    fn get_total_minutes(&mut self) -> u64 {
-        if !self.was_paused {
-            self.update_minutes();
-        }
-        self.minutes
-    }
-
-    fn update_time(&mut self) {
-        self.update_hours();
-        self.update_minutes();
-    }
-
-    fn update_hours(&mut self) {
-        self.hours += self.get_hours();
-    }
-
-    fn update_minutes(&mut self) {
-        self.minutes += self.get_minutes();
-    }
-
-    fn reset_start(&mut self) {
-        self.start = Instant::now();
-    }
 }
 
 fn get_cursor_line(stdout: &mut RawTerminal<Stdout>) -> u16 {
