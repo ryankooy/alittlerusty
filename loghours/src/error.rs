@@ -1,6 +1,6 @@
 /*!
- * CustomError enum allowing a hidden terminal cursor to be
- * re-shown after error caught and before loghour quits
+ * Enum allowing a hidden terminal cursor to be re-shown
+ * after error caught and before loghour quits
  */
 
 use std::io;
@@ -11,20 +11,20 @@ use crate::util::show_cursor;
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum CustomError {
-    AnyhowError(anyhow::Error),
-    IoError(io::Error),
+    Os(anyhow::Error),
+    Io(io::Error),
 }
 
 impl From<anyhow::Error> for CustomError {
     fn from(err: anyhow::Error) -> Self {
         show_cursor().unwrap();
-        CustomError::AnyhowError(err)
+        CustomError::Os(err)
     }
 }
 
 impl From<io::Error> for CustomError {
     fn from(err: io::Error) -> Self {
         show_cursor().unwrap();
-        CustomError::IoError(err)
+        CustomError::Io(err)
     }
 }

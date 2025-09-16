@@ -1,16 +1,13 @@
 /*!
- * Work Hours Logger
- *
- * Optionally allows specifying file to which to write
- * date and hours logged
+ * Hours Logger
+ * Optionally allows specifying file for writing date/hours logged
  */
 
 use std::io::{self, Write};
 use anyhow::Result;
 use clap::{self, Parser};
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
-use tokio::{sync, task};
-use tokio::time::Duration;
+use tokio::{sync, task, time::Duration};
 
 mod error;
 mod state;
@@ -19,7 +16,7 @@ mod util;
 use state::{LogCommand as Command, LogState};
 
 #[derive(Parser)]
-#[command(name = "Hour Logger")]
+#[command(name = "Hours Logger")]
 #[command(about = "Log hours worked", long_about = None)]
 struct Cli {
     /// Path of file to which to log hours

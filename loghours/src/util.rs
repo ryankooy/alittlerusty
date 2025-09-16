@@ -1,4 +1,4 @@
-//! Utility functions for loghours
+//! Utility functions for Hours Logger
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Stdout, Write};
@@ -9,21 +9,21 @@ use termion::clear;
 use termion::cursor::{self, DetectCursorPos};
 use termion::raw::{IntoRawMode, RawTerminal};
 
+pub fn get_cursor_start_line(stdout: &mut RawTerminal<Stdout>) -> Result<u16> {
+    let y_pos: u16 = stdout.cursor_pos()?.1;
+    Ok(y_pos - 1)
+}
+
 pub fn clear_line(stdout: &mut RawTerminal<Stdout>, line: u16) -> Result<()> {
     write!(stdout, "{}{}", cursor::Goto(1, line), clear::CurrentLine)?;
     stdout.flush()?;
-
     Ok(())
 }
 
-pub fn get_cursor_start_line(stdout: &mut RawTerminal<Stdout>) -> Result<u16> {
-    match stdout.cursor_pos() {
-        Ok(pos) => {
-            let pos: u16 = pos.1 - 1;
-            Ok(pos)
-        }
-        Err(err) => Err(err.into()),
-    }
+pub fn hide_cursor(stdout: &mut RawTerminal<Stdout>) -> Result<()> {
+    write!(stdout, "{}", cursor::Hide)?;
+    stdout.flush()?;
+    Ok(())
 }
 
 pub fn show_cursor() -> Result<()> {
@@ -32,13 +32,6 @@ pub fn show_cursor() -> Result<()> {
 
     write!(stdout, "{}", cursor::Show)?;
     clear_line(&mut stdout, start_line)?;
-
-    Ok(())
-}
-
-pub fn hide_cursor(stdout: &mut RawTerminal<Stdout>) -> Result<()> {
-    write!(stdout, "{}", cursor::Hide)?;
-    stdout.flush()?;
 
     Ok(())
 }
