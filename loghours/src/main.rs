@@ -1,17 +1,14 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, Stdout, Write};
-use std::path::Path;
-use chrono::{Local};
+use std::io::{self, Write};
+use anyhow::Result;
 use clap::{self, Parser};
-use termion::clear;
-use termion::cursor::{self, DetectCursorPos};
-use termion::event::Key;
-use termion::input::TermRead;
-use termion::raw::{IntoRawMode, RawTerminal};
+use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 use tokio::{sync, task};
 use tokio::time::Duration;
 
+mod error;
 mod loopstate;
+mod util;
+
 use loopstate::{Command, State as LoopState};
 
 #[derive(Parser)]
@@ -24,24 +21,24 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    println!("[S] Start, [P] Pause, [R] Resume, [Space] Toggle Pause, [Q] Quit\n");
-
+async fn main() -> Result<(), error::CustomError> {
     let cli = Cli::parse();
-    let mut stdout = io::stdout().into_raw_mode()?;
-    let start_line: u16 = get_cursor_line(&mut stdout) - 1;
 
-    write!(stdout, "{}", cursor::Hide)?;
-    stdout.flush()?;
+    // Capture stdout and get cursor's starting line number
+    let mut stdout = io::stdout().into_raw_mode()?;
+    let start_line: u16 = util::get_cursor_start_line(&mut stdout)?;
+
+    writeln!(stdout, "[S] Start, [P] Pause, [R] Resume, [Space] Toggle Pause, [Q] Quit\n")?;
+    util::hide_cursor(&mut stdout)?;
 
     let (tx, mut rx) = sync::mpsc::channel::<Command>(100);
 
     // Key handler
     let input_handle = task::spawn_blocking(move || {
-        let stdin = io::stdin();
-        let mut keys = stdin.keys();
+        let mut keys = io::stdin().keys();
 
         while let Some(Ok(key)) = keys.next() {
+            // Match input keypress to command
             let command = match key {
                 Key::Char('s') => Some(Command::Start),
                 Key::Char('p') => Some(Command::Pause),
@@ -66,6 +63,7 @@ async fn main() -> io::Result<()> {
     loop {
         tokio::select! {
             cmd = rx.recv() => {
+                // We got a command, so call a LoopState method accordingly
                 match cmd {
                     Some(Command::Start) => state.start(),
                     Some(Command::Pause) => state.pause(),
@@ -79,69 +77,50 @@ async fn main() -> io::Result<()> {
                 }
             }
             _ = interval.tick() => {
+                // No input received, so write some stuff to stdout
+                // if LoopState is active
                 if state.is_running() {
-                    clear_line(&mut stdout, start_line);
+                    util::clear_line(&mut stdout, start_line)?;
+
                     if state.is_paused() {
-                        println!("Paused at {:.2} hours", state.get_total_hours());
+                        writeln!(stdout, "Paused at {:.2} hours", state.get_total_hours())?;
                     } else {
                         if counter == u64::MAX {
                             counter = 0;
                         }
                         counter += 1;
-                        println!(
+
+                        writeln!(
+                            stdout,
                             "{} min {}\r",
                             state.get_total_minutes(),
                             "★".repeat((counter % 20) as usize + 1)
-                        );
-                        clear_line(&mut stdout, start_line + 1);
+                        )?;
+
+                        util::clear_line(&mut stdout, start_line + 1)?;
                     }
                 }
             }
         }
     }
 
+    // Stop the key handler
     input_handle.abort();
-    (0..=1).for_each(|i| clear_line(&mut stdout, start_line - i));
+
+    // Clear last couple lines and show cursor
+    (0..=1).for_each(|i| util::clear_line(&mut stdout, start_line - i).unwrap());
+    util::show_cursor()?;
 
     let hours: f64 = state.get_total_hours();
 
+    // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        write_file(&cli.filepath, hours)?;
-        println!("Hours logged: {:.2}", hours);
+        util::write_file(&cli.filepath, hours)?;
+        writeln!(stdout, "Hours logged: {:.2}", hours)?;
     } else {
-        println!("No hours logged");
+        writeln!(stdout, "No hours logged")?;
     }
 
-    write!(stdout, "{}", cursor::Show)?;
-    clear_line(&mut stdout, start_line);
-
-    Ok(())
-}
-
-fn get_cursor_line(stdout: &mut RawTerminal<Stdout>) -> u16 {
-    let line = stdout.cursor_pos().unwrap().1;
-    line
-}
-
-fn clear_line(stdout: &mut RawTerminal<Stdout>, line: u16) {
-    write!(stdout, "{}{}", cursor::Goto(1, line), clear::CurrentLine).unwrap();
-    stdout.flush().unwrap();
-}
-
-fn write_file(filepath: &Option<String>, hours: f64) -> io::Result<()> {
-    if let Some(f) = filepath {
-        if !Path::new(&f).exists() {
-            let _ = File::create(f)?;
-        }
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(f)?;
-
-        let date = Local::now().format("%Y-%m-%d").to_string();
-        writeln!(file, "{} {:.2}", date, hours)?;
-    }
-
+    util::clear_line(&mut stdout, start_line)?;
     Ok(())
 }
