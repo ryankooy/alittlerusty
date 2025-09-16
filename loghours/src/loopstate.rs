@@ -89,15 +89,7 @@ impl State {
     }
 
     fn update_time(&mut self) {
-        self.update_hours();
-        self.update_minutes();
-    }
-
-    fn update_hours(&mut self) {
         self.hours += self.get_hours_since_start_time();
-    }
-
-    fn update_minutes(&mut self) {
         self.minutes += self.get_minutes_since_start_time();
     }
 
