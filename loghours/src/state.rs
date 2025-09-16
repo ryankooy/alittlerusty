@@ -1,7 +1,8 @@
 use tokio::time::Instant;
 
+/// Commands to be matched to LogState method calls
 #[derive(Debug, Clone, Copy)]
-pub enum Command {
+pub enum LogCommand {
     Start,
     Pause,
     Resume,
@@ -9,15 +10,25 @@ pub enum Command {
     Quit,
 }
 
-pub struct State {
+/// Logging state
+pub struct LogState {
+    /// Whether logging is paused
     paused: bool,
+
+    /// Whether logging was started and is active
     running: bool,
+
+    /// Time logging started or was resumed after being paused
     start_time: Instant,
+
+    /// Total hours logged
     hours: f64,
+
+    /// Total minutes logged
     minutes: u64,
 }
 
-impl State {
+impl LogState {
     pub fn new() -> Self {
         Self {
             paused: false,

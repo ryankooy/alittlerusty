@@ -1,3 +1,8 @@
+/*!
+ * CustomError enum allowing a hidden terminal cursor to be
+ * re-shown after error caught and before loghour quits
+ */
+
 use std::io;
 use anyhow;
 

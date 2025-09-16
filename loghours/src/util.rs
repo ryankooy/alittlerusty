@@ -1,3 +1,5 @@
+//! Utility functions for loghours
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Stdout, Write};
 use std::path::Path;
