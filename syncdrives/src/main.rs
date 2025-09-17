@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-use std::fs;
-use std::io::{Error, ErrorKind};
-use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::string::String;
+//! Drive Syncer
 
-// Run `cargo add clap --features derive`
 use clap::{self, Parser};
+
+mod util;
+use util::Drive;
 
 #[derive(Parser)]
 #[command(name = "Drive Syncer")]
@@ -18,7 +15,11 @@ struct Cli {
 
     /// External drive's identifying letter
     #[arg(short = 'l', long, value_name = "LETTER")]
-    drive_letter: Option<String>,
+    external_drive_letter: Option<String>,
+
+    /// External drive's nickname
+    #[arg(short = 'n', long, value_name = "NICKNAME")]
+    external_drive_nickname: Option<String>,
 
     /// Perform dry-run sync only
     #[arg(short, long)]
@@ -36,34 +37,43 @@ fn main() {
     let mut sync_all: bool = false;
 
     // Google Drive
-    let dest_gdrv = HashMap::from([
-        ("mp", "/mnt/g"),
-        ("drv", "G:"),
-        ("dir", "/mnt/g/My Drive"),
-        ("desc", "Google Drive")
-    ]);
+    let dest_gdrv = Drive {
+        mountpoint: "/mnt/g",
+        drive: "G:",
+        dir: "/mnt/g/My Drive",
+        desc: "Google Drive",
+        err: None,
+    };
 
     let mut dest_dirs = vec![dest_gdrv];
 
-    // Get external SSD "Redkid" info
-    let (mp_extl, drv_extl, dir_extl) = if let Some(letter) = cli.drive_letter.as_deref() {
+    // Get external drive info from args
+    let (mp, drv, dir, desc) = if let Some(letter) = cli.external_drive_letter {
         sync_all = true;
-        let mp: String = format!("/mnt/{}", &letter);
-        let drv: String = format!("{}:", &letter.to_uppercase());
-        let dir: String = mp.clone();
-        (mp, drv, dir)
+        let mountpoint: String = format!("/mnt/{}", &letter);
+        let drive: String = format!("{}:", &letter.to_uppercase());
+        let dir: String = mountpoint.clone();
+
+        let desc: String = if let Some(nickname) = cli.external_drive_nickname {
+            nickname
+        } else {
+            String::from("External Drive")
+        };
+
+        (mountpoint, drive, dir, desc)
     } else {
-        (String::new(), String::new(), String::new())
+        (String::new(), String::new(), String::new(), String::new())
     };
 
     if sync_all {
-        // Redkid
-        let dest_extl = HashMap::from([
-            ("mp", mp_extl.as_str()),
-            ("drv", drv_extl.as_str()),
-            ("dir", dir_extl.as_str()),
-            ("desc", "Redkid")
-        ]);
+        // External drive
+        let dest_extl = Drive {
+            mountpoint: mp.as_str(),
+            drive: drv.as_str(),
+            dir: dir.as_str(),
+            desc: desc.as_str(),
+            err: None,
+        };
 
         dest_dirs.push(dest_extl);
     }
@@ -75,15 +85,22 @@ fn main() {
     // Iterate destinations and try to mount their drives and sync
     // their directories with local ones
     for dest in dest_dirs.iter_mut() {
-        if let Err(e) = mount_drive(&dest) {
+        if let Err(e) = util::mount_drive(&dest) {
             eprintln!("{}", e);
-            dest.insert("err", "mount-err");
+            dest.err = Some("mount-err");
             continue;
         }
 
-        if let Err(e) = sync_dirs_with_local(&dest, &subdirs, base_src_dir.as_str(), &hidden_files, &cli) {
+        if let Err(e) = util::sync_dirs_with_local(
+            &dest,
+            &subdirs,
+            base_src_dir.as_str(),
+            &hidden_files,
+            cli.user.as_str(),
+            cli.dry_run,
+        ) {
             eprintln!("{}", e);
-            dest.insert("err", "sync-err");
+            dest.err = Some("sync-err");
             break;
         }
     }
@@ -92,23 +109,20 @@ fn main() {
         // Iterate destinations again and try to sync their
         // synced/ directories with each other
         for src in dest_dirs.iter() {
-            if src.get("err").is_none() {
-                let src_sync_dir = format!("{}/wsl/{}/synced/", src.get("dir").unwrap(), cli.user);
-                let src_desc: &str = src.get("desc").unwrap();
+            if src.err.is_none() {
+                let src_sync_dir = format!("{}/wsl/{}/synced/", src.dir, cli.user);
 
                 for dest in dest_dirs.iter() {
-                    if dest.get("err").is_none() {
-                        let dest_sync_dir = format!("{}/wsl/{}/synced/", dest.get("dir").unwrap(), cli.user);
+                    if dest.err.is_none() {
+                        let dest_sync_dir = format!("{}/wsl/{}/synced/", dest.dir, cli.user);
 
                         if dest_sync_dir != src_sync_dir {
-                            let dest_desc: &str = dest.get("desc").unwrap();
-
-                            if let Err(e) = sync_dir(
+                            if let Err(e) = util::sync_dir(
                                 src_sync_dir.as_str(),
                                 dest_sync_dir.as_str(),
-                                src_desc,
-                                dest_desc,
-                                cli.dry_run
+                                src.desc,
+                                dest.desc,
+                                cli.dry_run,
                             ) {
                                 eprintln!("{}", e);
                             }
@@ -120,216 +134,3 @@ fn main() {
     }
 }
 
-fn mount_drive(dest: &HashMap<&str, &str>) -> Result<(), Error> {
-    let mp: &str = dest.get("mp").unwrap();
-
-    // Try to create mountpoint
-    let _ = fs::create_dir(mp);
-
-    if is_mountpoint_empty(mp) {
-        // Mount the drive contents at mountpoint
-        let drv: &str = dest.get("drv").unwrap();
-        let mount = Command::new("mount")
-            .args(["-t", "drvfs", drv, mp])
-            .output();
-
-        if !is_success(&mount) {
-            let err_msg = format!("Could not mount {} at {}", drv, mp);
-            return Err(Error::new(ErrorKind::NotFound, err_msg));
-        }
-    }
-
-    Ok(())
-}
-
-fn is_mountpoint_empty(mountpoint: &str) -> bool {
-    // Check if mountpoint is empty
-    match PathBuf::from(mountpoint).read_dir().map(|mut i| i.next().is_none()) {
-        Ok(is_empty) => is_empty,
-        Err(e) => match e.kind() {
-            ErrorKind::InvalidInput => true,
-            _ => {
-                eprintln!("{}", e);
-                false
-            }
-        }
-    }
-}
-
-fn sync_dirs_with_local(
-    dest: &HashMap<&str, &str>,
-    subdirs: &Vec<&str>,
-    base_src_dir: &str,
-    hidden_files: &Vec<&str>,
-    cli: &Cli,
-) -> Result<(), Error> {
-    let mut rsync_opts = vec!["-a", "--no-links", "--itemize-changes", "--update"];
-
-    if cli.dry_run {
-        rsync_opts.push("--dry-run");
-    }
-
-    let base_dest_dir: &str = dest.get("dir").unwrap();
-    let dest_desc: &str = dest.get("desc").unwrap();
-
-    // Sync hidden files
-    if let Err(e) = copy_hidden_files(base_src_dir, base_dest_dir, dest_desc, &hidden_files, cli) {
-        return Err(e);
-    }
-
-    // Sync with local subdirectories
-    for subdir in subdirs.iter() {
-        let src_dir = format!("{}/{}/", base_src_dir, subdir);
-        let dest_dir = format!("{}/wsl/{}/{}/", base_dest_dir, cli.user, subdir);
-        let rsync = run_rsync(src_dir.as_str(), dest_dir.as_str(), "Local", dest_desc, subdir, &rsync_opts);
-
-        if is_success(&rsync) {
-            print_rsync_output_lines(&rsync);
-
-            if cli.dry_run {
-                println!("Would sync {} with {}", dest_dir, src_dir);
-            } else {
-                println!("Synced {} with {}", dest_dir, src_dir);
-            }
-        } else {
-            let err_msg = format!("Could not sync {} with {}", dest_dir, src_dir);
-            return Err(Error::new(ErrorKind::Other, err_msg));
-        }
-    }
-
-    Ok(())
-}
-
-fn sync_dir(
-    src_dir: &str,
-    dest_dir: &str,
-    src_desc: &str,
-    dest_desc: &str,
-    dry_run: bool,
-) -> Result<(), Error> {
-    let mut rsync_opts = vec!["--itemize-changes", "--recursive", "--ignore-existing"];
-
-    if dry_run {
-        rsync_opts.push("--dry-run");
-    }
-
-    let rsync = run_rsync(src_dir, dest_dir, src_desc, dest_desc, "synced", &rsync_opts);
-
-    if is_success(&rsync) {
-        let output = get_stdout(&rsync);
-        if !output.is_empty() {
-            println!("{}", output);
-        }
-
-        if dry_run {
-            println!("Would sync {} with {}", dest_dir, src_dir);
-        } else {
-            println!("Synced {} with {}", dest_dir, src_dir);
-        }
-    } else {
-        let err_msg = format!("Could not sync {} with {}", dest_dir, src_dir);
-        return Err(Error::new(ErrorKind::Other, err_msg));
-    }
-
-    Ok(())
-}
-
-fn copy_hidden_files(
-    src_dir: &str,
-    base_dest_dir: &str,
-    dest_desc: &str,
-    files: &Vec<&str>,
-    cli: &Cli,
-) -> Result<(), Error> {
-    let dest_dir = format!("{}/wsl/{}/", base_dest_dir, cli.user);
-
-    if cli.dry_run {
-        println!("Would copy hidden files from {}/ to {}", src_dir, dest_dir);
-    } else {
-        let cp = run_cp_hidden_files(src_dir, dest_dir.as_str(), dest_desc, files);
-
-        if is_success(&cp) {
-            println!("Copied hidden files from {}/ to {}", src_dir, dest_dir);
-        } else {
-            let err_msg = format!("Could not copy hidden files from {}/ to {}", src_dir, dest_dir);
-            return Err(Error::new(ErrorKind::Other, err_msg));
-        }
-    }
-
-    Ok(())
-}
-
-fn run_rsync(
-    src_dir: &str,
-    dest_dir: &str,
-    src_desc: &str,
-    dest_desc: &str,
-    subdir: &str,
-    rsync_opts: &Vec<&str>,
-) -> Result<Output, Error> {
-        println!("\n{src} {sdir}/ -> {dest} {sdir}/", src=src_desc, dest=dest_desc, sdir=subdir);
-
-        // Try to create subdirectory path
-        let _ = fs::create_dir_all(dest_dir);
-
-        // Run rsync command
-        Command::new("rsync")
-            .args(rsync_opts)
-            .args([src_dir, dest_dir])
-            .output()
-}
-
-fn run_cp_hidden_files(
-    src_dir: &str,
-    dest_dir: &str,
-    dest_desc: &str,
-    files: &Vec<&str>,
-) -> Result<Output, Error> {
-    println!("\nLocal hidden files -> {}", dest_desc);
-    println!("{}", files.join(", "));
-
-    let mut hidden_files: Vec<String> = Vec::new();
-    for filename in files.iter() {
-        let path = format!("{}/{}", src_dir, filename);
-        hidden_files.push(path);
-    }
-
-    // Run cp command
-    Command::new("cp").args(hidden_files).arg(dest_dir).output()
-}
-
-fn get_stdout(output: &Result<Output, Error>) -> String {
-    let out = output.as_ref().unwrap();
-    String::from_utf8_lossy(&out.stdout).to_string()
-}
-
-fn print_rsync_output_lines(output: &Result<Output, Error>) {
-    for line in get_stdout(output).lines() {
-        if line.starts_with(">") {
-            println!("{}", line);
-        }
-    }
-}
-
-fn is_success(output: &Result<Output, Error>) -> bool {
-    let mut success: bool = false;
-
-    match output {
-        Ok(output) => {
-            if output.status.success() {
-                success = true;
-            } else {
-                let mut err_str = String::from_utf8_lossy(&output.stderr);
-                if err_str.is_empty() {
-                    err_str = output.status.to_string().into();
-                }
-                eprintln!("{}", err_str);
-            }
-        }
-        Err(e) => {
-            eprintln!("ERROR: {}", e);
-        }
-    }
-
-    success
-}
