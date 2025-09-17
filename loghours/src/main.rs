@@ -5,8 +5,7 @@
 
 use std::io::{self, Write};
 use anyhow::Result;
-use clap::{self, Parser};
-use termion::{event::Key, input::TermRead, raw::IntoRawMode};
+use clap::{self, Parser, Subcommand};
 use tokio::{sync, task, time::Duration};
 
 mod error;
@@ -19,14 +18,50 @@ use state::{LogCommand as Command, LogState};
 #[command(name = "Hours Logger")]
 #[command(about = "Log hours worked", long_about = None)]
 struct Cli {
-    /// Path of file to which to log hours
-    #[arg(short, long, value_name = "FILEPATH")]
-    filepath: Option<String>,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum Commands {
+    /// Log Hours
+    Log {
+        /// Path of file to which to log hours
+        #[arg(short, long, value_name = "FILE")]
+        filename: Option<String>,
+    },
+
+    /// Read Hours
+    Read {
+        /// Path of file to which to read hours
+        #[arg(short, long, value_name = "FILE")]
+        filename: String,
+
+        /// Path of file to which to write hours
+        #[arg(short, long, value_name = "FILE")]
+        out_filename: Option<String>,
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), error::CustomError> {
     let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Log { filename } => {
+            log_hours(&filename).await?;
+        }
+        Commands::Read { filename, out_filename } => {
+            read_hours(filename, out_filename)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn log_hours(filename: &Option<String>) -> Result<(), error::CustomError> {
+    use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
     // Capture stdout and get cursor's starting line number
     let mut stdout = io::stdout().into_raw_mode()?;
@@ -118,12 +153,48 @@ async fn main() -> Result<(), error::CustomError> {
 
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        util::write_file(&cli.filepath, hours)?;
+        util::write_file(filename, hours)?;
         writeln!(stdout, "Hours logged: {:.2}", hours)?;
     } else {
         writeln!(stdout, "No hours logged")?;
     }
 
     util::clear_line(&mut stdout, start_line)?;
+
     Ok(())
 }
+
+fn read_hours(filename: String, out_filename: Option<String>) -> Result<()> {
+    use std::collections::BTreeMap;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use anyhow::Context;
+    //use std::path::Path;
+
+    // Open file
+    let file = File::open(&filename)
+        .with_context(|| format!("Failed to open file {}", filename))?;
+
+    let mut hours_by_date: BTreeMap<String, f64> = BTreeMap::new();
+    let mut total_hours: f64 = 0.0;
+
+    // Sum hours by date
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Some((date, hours_str)) = line.split_once(' ') {
+            let hours: f64 = hours_str.parse::<f64>()?;
+            let hours_for_day: &mut f64 = hours_by_date.entry(date.to_string()).or_insert(0.0f64);
+            *hours_for_day += hours;
+            total_hours += hours;
+        }
+    }
+
+    println!("{:#?}", hours_by_date);
+    println!("Total hours: {:.2}", total_hours);
+
+    if let Some(out) = out_filename {
+        println!("out file: {}", out);
+    }
+
+    Ok(())
+}
+

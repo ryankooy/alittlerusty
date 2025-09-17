@@ -36,8 +36,8 @@ pub fn show_cursor() -> Result<()> {
     Ok(())
 }
 
-pub fn write_file(filepath: &Option<String>, hours: f64) -> Result<()> {
-    if let Some(f) = filepath {
+pub fn write_file(filename: &Option<String>, hours: f64) -> Result<()> {
+    if let Some(f) = filename {
         if !Path::new(&f).exists() {
             let _ = File::create(f)
                 .with_context(|| format!("Failed to create file {}", f))?;
