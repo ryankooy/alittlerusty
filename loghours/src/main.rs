@@ -119,9 +119,9 @@ async fn main() -> Result<(), error::CustomError> {
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
         util::write_file(&cli.filepath, hours)?;
-        write!(stdout, "Hours logged: {:.2}", hours)?;
+        writeln!(stdout, "Hours logged: {:.2}", hours)?;
     } else {
-        write!(stdout, "No hours logged")?;
+        writeln!(stdout, "No hours logged")?;
     }
 
     util::clear_line(&mut stdout, start_line)?;
