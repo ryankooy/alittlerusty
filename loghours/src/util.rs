@@ -4,7 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Stdout, Write};
 use std::path::Path;
 use anyhow::{Context, Result};
-use chrono::Local;
+use chrono::{Datelike, Local, NaiveDate};
 use termion::clear;
 use termion::cursor::{self, DetectCursorPos};
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -36,23 +36,74 @@ pub fn show_cursor() -> Result<()> {
     Ok(())
 }
 
-pub fn write_file(filename: &Option<String>, hours: f64) -> Result<()> {
-    if let Some(f) = filename {
-        if !Path::new(&f).exists() {
-            let _ = File::create(f)
-                .with_context(|| format!("Failed to create file {}", f))?;
-        }
-
-        let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(f)
-            .with_context(|| format!("Failed to open file {}", f))?;
-
-        let date = Local::now().format("%Y-%m-%d").to_string();
-        writeln!(file, "{} {:.2}", date, hours)
-            .with_context(|| format!("Failed to write to file {}", f))?;
+pub fn write_file(filename: &String, hours: f64) -> Result<()> {
+    if !Path::new(filename).exists() {
+        let _ = File::create(filename)
+            .with_context(|| format!("Failed to create file {}", filename))?;
     }
 
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(filename)
+        .with_context(|| format!("Failed to open file {}", filename))?;
+
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    writeln!(file, "{} {:.2}", date, hours)
+        .with_context(|| format!("Failed to write to file {}", filename))?;
+
     Ok(())
+}
+
+pub fn parse_dates(
+    start_date: Option<String>,
+    end_date: Option<String>,
+    fmt_str: &str,
+) -> Result<(Option<NaiveDate>, Option<NaiveDate>)> {
+    let sdate: Option<NaiveDate> = if let Some(d) = start_date {
+        Some(NaiveDate::parse_from_str(d.as_str(), fmt_str)
+             .context("Failed to parse start date")?)
+    } else { None };
+
+    let edate: Option<NaiveDate> = if let Some(d) = end_date {
+        Some(NaiveDate::parse_from_str(d.as_str(), fmt_str)
+             .context("Failed to parse end date")?)
+    } else { None };
+
+    Ok((sdate, edate))
+}
+
+pub fn within_date_range(
+    date: NaiveDate,
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
+) -> bool {
+    let sdate_before: bool = start_date.is_none() || start_date.unwrap() <= date;
+    let edate_after: bool = end_date.is_none() || end_date.unwrap() > date;
+    sdate_before && edate_after
+}
+
+pub fn print_timeframe(start_date: Option<NaiveDate>, end_date: Option<NaiveDate>) {
+    let full_date_fmt: &str = "%B %-d, %C%y";
+    let month_day_fmt: &str = "%B %-d";
+    let day_year_fmt: &str = "%-d, %C%y";
+
+    match (start_date, end_date) {
+        (Some(sdate), Some(edate)) => {
+            let (sdate_str, edate_str) = if sdate.year() == edate.year() {
+                if sdate.month() == edate.month() {
+                    (sdate.format(month_day_fmt), edate.format(day_year_fmt))
+                } else {
+                    (sdate.format(month_day_fmt), edate.format(full_date_fmt))
+                }
+            } else {
+                (sdate.format(full_date_fmt), edate.format(full_date_fmt))
+            };
+
+            println!("{} - {}", sdate_str, edate_str);
+        }
+        (Some(sdate), None) => println!("Since {}", sdate.format(full_date_fmt)),
+        (None, Some(edate)) => println!("Before {}", edate.format(full_date_fmt)),
+        (None, None) => println!("All time"),
+    }
 }

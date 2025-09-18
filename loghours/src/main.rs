@@ -1,7 +1,4 @@
-/*!
- * Hours Logger
- * Optionally allows specifying file for writing date/hours logged
- */
+//! Hours Logger
 
 use std::io::{self, Write};
 use anyhow::Result;
@@ -16,7 +13,7 @@ use state::{LogCommand as Command, LogState};
 
 #[derive(Parser)]
 #[command(name = "Hours Logger")]
-#[command(about = "Log hours worked", long_about = None)]
+#[command(about = "Log hours worked or summarize timesheet", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -25,22 +22,30 @@ struct Cli {
 #[derive(Subcommand)]
 #[command(rename_all = "kebab-case")]
 enum Commands {
-    /// Log Hours
+    /// Log hours worked to file
     Log {
-        /// Path of file to which to log hours
-        #[arg(short, long, value_name = "FILE")]
-        filename: Option<String>,
-    },
-
-    /// Read Hours
-    Read {
-        /// Path of file to which to read hours
-        #[arg(short, long, value_name = "FILE")]
-        filename: String,
-
         /// Path of file to which to write hours
         #[arg(short, long, value_name = "FILE")]
-        out_filename: Option<String>,
+        outfile: String,
+    },
+
+    /// Read hours from file and print summary
+    Read {
+        /// Path of file from which to read hours
+        #[arg(short, long, value_name = "FILE")]
+        file: String,
+
+        /// Start date in format 'YYYY-mm-dd'
+        #[arg(short, long, value_name = "DATE")]
+        start_date: Option<String>,
+
+        /// End date in format 'YYYY-mm-dd'
+        #[arg(short, long, value_name = "DATE")]
+        end_date: Option<String>,
+
+        /// Hourly pay rate
+        #[arg(short, long)]
+        rate: Option<u32>,
     }
 }
 
@@ -49,18 +54,24 @@ async fn main() -> Result<(), error::CustomError> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Log { filename } => {
-            log_hours(&filename).await?;
+        Commands::Log { outfile } => {
+            log_hours(&outfile).await?;
         }
-        Commands::Read { filename, out_filename } => {
-            read_hours(filename, out_filename)?;
+        Commands::Read {
+            file,
+            start_date,
+            end_date,
+            rate,
+        } => {
+            read_hours(file, start_date, end_date, rate)?;
         }
     }
 
     Ok(())
 }
 
-async fn log_hours(filename: &Option<String>) -> Result<(), error::CustomError> {
+/// Log hours to file and stdout
+async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
     // Capture stdout and get cursor's starting line number
@@ -153,7 +164,7 @@ async fn log_hours(filename: &Option<String>) -> Result<(), error::CustomError> 
 
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        util::write_file(filename, hours)?;
+        util::write_file(&filename, hours)?;
         writeln!(stdout, "Hours logged: {:.2}", hours)?;
     } else {
         writeln!(stdout, "No hours logged")?;
@@ -164,37 +175,58 @@ async fn log_hours(filename: &Option<String>) -> Result<(), error::CustomError> 
     Ok(())
 }
 
-fn read_hours(filename: String, out_filename: Option<String>) -> Result<()> {
+/**
+ * Read dates and hours from given file and sum hours both by date
+ * and by month; each line of input file should contain two values
+ * separated by a space: a date and a floating point number of hours
+ */
+fn read_hours(
+    filename: String,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    rate: Option<u32>,
+) -> Result<()> {
     use std::collections::BTreeMap;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use anyhow::Context;
-    //use std::path::Path;
+    use chrono::NaiveDate;
+
+    let fmt_str: &str = "%Y-%m-%d";
+    let (sdate, edate) = util::parse_dates(start_date, end_date, fmt_str)?;
+    let mut hours_by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+    let mut total_hours: f64 = 0.0;
 
     // Open file
     let file = File::open(&filename)
         .with_context(|| format!("Failed to open file {}", filename))?;
 
-    let mut hours_by_date: BTreeMap<String, f64> = BTreeMap::new();
-    let mut total_hours: f64 = 0.0;
-
-    // Sum hours by date
+    // Read file and sum hours
     for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if let Some((date, hours_str)) = line.split_once(' ') {
+        if let Some((date_str, hours_str)) = line.split_once(' ') {
             let hours: f64 = hours_str.parse::<f64>()?;
-            let hours_for_day: &mut f64 = hours_by_date.entry(date.to_string()).or_insert(0.0f64);
-            *hours_for_day += hours;
-            total_hours += hours;
+            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?;
+
+            if util::within_date_range(date, sdate, edate) {
+                *hours_by_day.entry(date).or_insert(0.0f64) += hours;
+                total_hours += hours;
+            }
         }
     }
 
-    println!("{:#?}", hours_by_date);
-    println!("Total hours: {:.2}", total_hours);
+    // Print summary
+    util::print_timeframe(sdate, edate);
+    if !hours_by_day.is_empty() {
+        println!("Daily hours worked:\n{:#?}", hours_by_day);
+        println!("Total hours worked: {:.2}", total_hours);
 
-    if let Some(out) = out_filename {
-        println!("out file: {}", out);
+        if let Some(hourly_rate) = rate {
+            let pay: f64 = (hourly_rate as f64) * total_hours;
+            println!("Gross wage: ${:.2}", pay);
+        }
+    } else {
+        println!("No hours worked");
     }
 
     Ok(())
 }
-
