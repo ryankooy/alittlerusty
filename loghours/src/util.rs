@@ -36,7 +36,7 @@ pub fn show_cursor() -> Result<()> {
     Ok(())
 }
 
-pub fn write_file(filename: &String, hours: f64) -> Result<()> {
+pub fn write_file(filename: &String, hours: f64, fmt_str: &str) -> Result<()> {
     if !Path::new(filename).exists() {
         let _ = File::create(filename)
             .with_context(|| format!("Failed to create file {}", filename))?;
@@ -48,7 +48,7 @@ pub fn write_file(filename: &String, hours: f64) -> Result<()> {
         .open(filename)
         .with_context(|| format!("Failed to open file {}", filename))?;
 
-    let date = Local::now().format("%Y-%m-%d").to_string();
+    let date = Local::now().format(fmt_str).to_string();
     writeln!(file, "{} {:.2}", date, hours)
         .with_context(|| format!("Failed to write to file {}", filename))?;
 
@@ -83,6 +83,7 @@ pub fn within_date_range(
     sdate_before && edate_after
 }
 
+/// Print timeframe in a format like "September 15 - October 15, 2025".
 pub fn print_timeframe(start_date: Option<NaiveDate>, end_date: Option<NaiveDate>) {
     let full_date_fmt: &str = "%B %-d, %C%y";
     let month_day_fmt: &str = "%B %-d";

@@ -8,8 +8,9 @@ use tokio::{sync::mpsc, task, time::Duration};
 mod error;
 mod state;
 mod util;
-
 use state::{LogCommand as Command, LogState};
+
+const DATE_FMT_STR: &str = "%Y-%m-%d";
 
 #[derive(Parser)]
 #[command(name = "Hours Logger")]
@@ -70,7 +71,7 @@ async fn main() -> Result<(), error::CustomError> {
     Ok(())
 }
 
-/// Log hours to file and stdout
+/// Log hours to file and stdout.
 async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
@@ -162,7 +163,7 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
 
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        util::write_file(&filename, hours)?;
+        util::write_file(&filename, hours, DATE_FMT_STR)?;
         writeln!(stdout, "Hours logged: {:.2}", hours)?;
     } else {
         writeln!(stdout, "No hours logged")?;
@@ -175,8 +176,8 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
 
 /**
  * Read dates and hours from given file and sum hours both by date
- * and by month; each line of input file should contain two values
- * separated by a space: a date and a floating point number of hours
+ * and by month. Each line of input file should contain two values
+ * separated by a space: a date and a floating point number of hours.
  */
 fn read_hours(
     filename: String,
@@ -190,10 +191,10 @@ fn read_hours(
     use anyhow::Context;
     use chrono::NaiveDate;
 
-    let fmt_str: &str = "%Y-%m-%d";
-    let (sdate, edate) = util::parse_dates(start_date, end_date, fmt_str)?;
     let mut hours_by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
     let mut total_hours: f64 = 0.0;
+
+    let (sdate, edate) = util::parse_dates(start_date, end_date, DATE_FMT_STR)?;
 
     // Open file
     let file = File::open(&filename)
@@ -203,7 +204,7 @@ fn read_hours(
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         if let Some((date_str, hours_str)) = line.split_once(' ') {
             let hours: f64 = hours_str.parse::<f64>()?;
-            let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?;
+            let date = NaiveDate::parse_from_str(date_str, DATE_FMT_STR)?;
 
             if util::within_date_range(date, sdate, edate) {
                 *hours_by_day.entry(date).or_insert(0.0f64) += hours;
