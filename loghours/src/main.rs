@@ -3,7 +3,7 @@
 use std::io::{self, Write};
 use anyhow::Result;
 use clap::{self, Parser, Subcommand};
-use tokio::{sync, task, time::Duration};
+use tokio::{sync::mpsc, task, time::Duration};
 
 mod error;
 mod state;
@@ -81,7 +81,7 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
     writeln!(stdout, "[S] Start, [P] Pause, [R] Resume, [Space] Toggle Pause, [Q] Quit\n")?;
     util::hide_cursor(&mut stdout)?;
 
-    let (tx, mut rx) = sync::mpsc::channel::<Command>(100);
+    let (tx, mut rx) = mpsc::channel::<Command>(100);
 
     // Key handler
     let input_handle = task::spawn_blocking(move || {
@@ -154,9 +154,7 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
         }
     }
 
-    // Stop the key handler
-    input_handle.abort();
-
+    input_handle.await.unwrap();
     util::clear_line(&mut stdout, start_line)?;
     util::show_cursor()?;
 
