@@ -2,12 +2,16 @@
 
 use std::io::{self, Write};
 use anyhow::Result;
+use chrono::Local;
 use clap::{self, Parser, Subcommand};
 use tokio::{sync::mpsc, task, time::Duration};
 
+mod db;
 mod error;
 mod state;
 mod util;
+
+use db::{DbDate, Entry};
 use state::{LogCommand as Command, LogState};
 
 const DATE_FMT_STR: &str = "%Y-%m-%d";
@@ -25,16 +29,16 @@ struct Cli {
 enum Commands {
     /// Log hours worked to file
     Log {
-        /// Path of file to which to write hours
+        /// Optional path of file to which to write hours
         #[arg(short, long, value_name = "FILE")]
-        outfile: String,
+        outfile: Option<String>,
     },
 
     /// Read hours from file and print summary
     Read {
-        /// Path of file from which to read hours
+        /// Optional path of file from which to read hours
         #[arg(short, long, value_name = "FILE")]
-        file: String,
+        file: Option<String>,
 
         /// Start date in format 'YYYY-mm-dd'
         #[arg(short, long, value_name = "DATE")]
@@ -56,7 +60,7 @@ async fn main() -> Result<(), error::CustomError> {
 
     match cli.command {
         Commands::Log { outfile } => {
-            log_hours(&outfile).await?;
+            log_hours(outfile).await?;
         }
         Commands::Read {
             file,
@@ -72,7 +76,7 @@ async fn main() -> Result<(), error::CustomError> {
 }
 
 /// Log hours to file and stdout.
-async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
+async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
     // Capture stdout and get cursor's starting line number
@@ -163,8 +167,15 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
 
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        util::write_file(&filename, hours, DATE_FMT_STR)?;
         writeln!(stdout, "Hours logged: {:.2}", hours)?;
+
+        if let Some(f) = filename {
+            util::write_file(&f, hours, DATE_FMT_STR)?;
+        }
+
+        let mut conn = db::create_conn()?;
+        let date = Local::now().date_naive();
+        db::add_entry(&mut conn, date, hours)?;
     } else {
         writeln!(stdout, "No hours logged")?;
     }
@@ -180,7 +191,7 @@ async fn log_hours(filename: &String) -> Result<(), error::CustomError> {
  * separated by a space: a date and a floating point number of hours.
  */
 fn read_hours(
-    filename: String,
+    filename: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
     rate: Option<u32>,
@@ -195,26 +206,37 @@ fn read_hours(
     let mut total_hours: f64 = 0.0;
 
     let (sdate, edate) = util::parse_dates(start_date, end_date, DATE_FMT_STR)?;
+    util::print_timeframe(sdate, edate);
 
-    // Open file
-    let file = File::open(&filename)
-        .with_context(|| format!("Failed to open file {}", filename))?;
+    if let Some(f) = filename {
+        // Open file
+        let file = File::open(&f)
+            .with_context(|| format!("Failed to open file {}", f))?;
 
-    // Read file and sum hours
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        if let Some((date_str, hours_str)) = line.split_once(' ') {
-            let hours: f64 = hours_str.parse::<f64>()?;
-            let date = NaiveDate::parse_from_str(date_str, DATE_FMT_STR)?;
+        // Read file and sum hours
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some((date_str, hours_str)) = line.split_once(' ') {
+                let hours: f64 = hours_str.parse::<f64>()?;
+                let date = NaiveDate::parse_from_str(date_str, DATE_FMT_STR)?;
 
-            if util::within_date_range(date, sdate, edate) {
-                *hours_by_day.entry(date).or_insert(0.0f64) += hours;
-                total_hours += hours;
+                if util::within_date_range(date, sdate, edate) {
+                    *hours_by_day.entry(date).or_insert(0.0f64) += hours;
+                    total_hours += hours;
+                }
             }
         }
     }
 
+    let mut conn = db::create_conn()?;
+    let entries: Vec<Entry> = db::get_entries_by_date_range(&mut conn, sdate, edate)?;
+
+    for entry in entries.iter() {
+        let DbDate(date) = entry.date;
+        *hours_by_day.entry(date).or_insert(0.0f64) += entry.hours;
+        total_hours += entry.hours;
+    }
+
     // Print summary
-    util::print_timeframe(sdate, edate);
     if !hours_by_day.is_empty() {
         println!("Daily hours worked:\n{:#?}", hours_by_day);
         println!("Total hours worked: {:.2}", total_hours);

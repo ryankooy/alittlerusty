@@ -10,5 +10,6 @@ edition = "2018"
 anyhow = "1.0"
 chrono = "0.4"
 clap = { version = "4.5.47", features = ["derive"] }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 termion = "*"
 tokio = { version = "1", features = ["full"] }
