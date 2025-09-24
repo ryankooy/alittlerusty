@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 use anyhow::Result;
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use clap::{self, Parser, Subcommand};
 use tokio::{sync::mpsc, task, time::Duration};
 
@@ -11,7 +11,7 @@ mod error;
 mod state;
 mod util;
 
-use db::{DbDate, Entry};
+use db::Entry;
 use state::{LogCommand as Command, LogState};
 
 const DATE_FMT_STR: &str = "%Y-%m-%d";
@@ -51,7 +51,25 @@ enum Commands {
         /// Hourly pay rate
         #[arg(short, long)]
         rate: Option<u32>,
-    }
+    },
+
+    /// Add log entry to database
+    Add {
+        /// Date hours logged ('YYYY-mm-dd')
+        #[arg(short, long)]
+        date: String,
+
+        /// Hours logged for given date (e.g., '3.25')
+        #[arg(short = 't', long)]
+        hours: f64,
+    },
+
+    /// Delete log entries from database
+    Remove {
+        /// Date of entries to delete ('YYYY-mm-dd')
+        #[arg(short, long)]
+        date: String,
+    },
 }
 
 #[tokio::main]
@@ -59,9 +77,7 @@ async fn main() -> Result<(), error::CustomError> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Log { outfile } => {
-            log_hours(outfile).await?;
-        }
+        Commands::Log { outfile } => log_hours(outfile).await?,
         Commands::Read {
             file,
             start_date,
@@ -69,6 +85,15 @@ async fn main() -> Result<(), error::CustomError> {
             rate,
         } => {
             read_hours(file, start_date, end_date, rate)?;
+        }
+        Commands::Add { date, hours } => {
+            let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
+            let rowid = db::add_entry(d, hours)?;
+            println!("Added entry #{}", rowid);
+        }
+        Commands::Remove { date } => {
+            let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
+            db::remove_entries_by_date(d)?;
         }
     }
 
@@ -170,12 +195,13 @@ async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
         writeln!(stdout, "Hours logged: {:.2}", hours)?;
 
         if let Some(f) = filename {
+            // Log hours to file
             util::write_file(&f, hours, DATE_FMT_STR)?;
+        } else {
+            // Log hours to database
+            let date = Local::now().date_naive();
+            let _ = db::add_entry(date, hours)?;
         }
-
-        let mut conn = db::create_conn()?;
-        let date = Local::now().date_naive();
-        db::add_entry(&mut conn, date, hours)?;
     } else {
         writeln!(stdout, "No hours logged")?;
     }
@@ -200,7 +226,6 @@ fn read_hours(
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use anyhow::Context;
-    use chrono::NaiveDate;
 
     let mut hours_by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
     let mut total_hours: f64 = 0.0;
@@ -225,15 +250,14 @@ fn read_hours(
                 }
             }
         }
-    }
+    } else {
+        // Read hours from database
+        let entries: Vec<Entry> = db::get_entries_by_date_range(sdate, edate)?;
 
-    let mut conn = db::create_conn()?;
-    let entries: Vec<Entry> = db::get_entries_by_date_range(&mut conn, sdate, edate)?;
-
-    for entry in entries.iter() {
-        let DbDate(date) = entry.date;
-        *hours_by_day.entry(date).or_insert(0.0f64) += entry.hours;
-        total_hours += entry.hours;
+        for entry in entries.iter() {
+            *hours_by_day.entry(entry.date.date_naive()).or_insert(0.0f64) += entry.hours;
+            total_hours += entry.hours;
+        }
     }
 
     // Print summary

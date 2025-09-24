@@ -1,10 +1,13 @@
 use anyhow::Result;
 use rusqlite::Connection;
 
+use crate::db::schema::create_schema;
+
 pub fn create_conn() -> Result<Connection> {
-    let mut conn = Connection::open("../../hours.db")?;
+    // TODO: use config toml for path
+    let mut conn = Connection::open("/home/ranky/sqlite/hours.db")?;
     configure_conn(&mut conn)?;
-    crate::db::create_schema(&mut conn)?;
+    create_schema(&mut conn)?;
     Ok(conn)
 }
 
@@ -16,8 +19,6 @@ fn configure_conn(conn: &mut Connection) -> Result<()> {
         PRAGMA foreign_keys = TRUE;
         ",
     )?;
-
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     Ok(())
 }
