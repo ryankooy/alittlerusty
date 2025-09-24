@@ -11,7 +11,6 @@ mod error;
 mod state;
 mod util;
 
-use db::Entry;
 use state::{LogCommand as Command, LogState};
 
 const DATE_FMT_STR: &str = "%Y-%m-%d";
@@ -252,7 +251,7 @@ fn read_hours(
         }
     } else {
         // Read hours from database
-        let entries: Vec<Entry> = db::get_entries_by_date_range(sdate, edate)?;
+        let entries = db::get_entries_by_date_range(sdate, edate)?;
 
         for entry in entries.iter() {
             *hours_by_day.entry(entry.date.date_naive()).or_insert(0.0f64) += entry.hours;

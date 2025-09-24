@@ -51,6 +51,7 @@ pub fn get_entries_by_date_range(
     end_date: Option<NaiveDate>,
 ) -> rusqlite::Result<Vec<Entry>> {
     let conn = create_conn().unwrap();
+
     let mut stmt = match (start_date, end_date) {
         (Some(sdate), Some(edate)) => {
             let mut s = conn.prepare(

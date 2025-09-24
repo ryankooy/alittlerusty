@@ -1,14 +1,23 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use rusqlite::Connection;
 
-use crate::db::schema::create_schema;
+use crate::db::{
+    config::get_config,
+    schema::create_schema,
+};
 
 pub fn create_conn() -> Result<Connection> {
-    // TODO: use config toml for path
-    let mut conn = Connection::open("/home/ranky/sqlite/hours.db")?;
-    configure_conn(&mut conn)?;
-    create_schema(&mut conn)?;
-    Ok(conn)
+    let config = get_config()?;
+
+    if let Some(db) = config.get_path() {
+        let mut conn = Connection::open(db)?;
+        configure_conn(&mut conn)?;
+        create_schema(&mut conn)?;
+
+        Ok(conn)
+    } else {
+        bail!("Bad config");
+    }
 }
 
 fn configure_conn(conn: &mut Connection) -> Result<()> {
