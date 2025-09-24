@@ -94,12 +94,12 @@ pub fn sync_dirs_with_local(
             print_rsync_output_lines(&rsync);
 
             if dry_run {
-                println!("Would sync {} with {}", dest_dir, src_dir);
+                println!("Would sync `{}` with `{}`", dest_dir, src_dir);
             } else {
-                println!("Synced {} with {}", dest_dir, src_dir);
+                println!("Synced `{}` with `{}`", dest_dir, src_dir);
             }
         } else {
-            let err_msg = format!("Could not sync {} with {}", dest_dir, src_dir);
+            let err_msg = format!("Could not sync `{}` with `{}`", dest_dir, src_dir);
             return Err(Error::new(ErrorKind::Other, err_msg));
         }
     }
@@ -129,9 +129,9 @@ pub fn sync_dir(
         }
 
         if dry_run {
-            println!("Would sync {} with {}", dest_dir, src_dir);
+            println!("Would sync `{}` with `{}`", dest_dir, src_dir);
         } else {
-            println!("Synced {} with {}", dest_dir, src_dir);
+            println!("Synced `{}` with `{}`", dest_dir, src_dir);
         }
     } else {
         let err_msg = format!("Could not sync {} with {}", dest_dir, src_dir);
@@ -174,14 +174,14 @@ fn copy_hidden_files(
     let dest_dir = format!("{}/wsl/{}/", base_dest_dir, user);
 
     if dry_run {
-        println!("Would copy hidden files from {}/ to {}", src_dir, dest_dir);
+        println!("Would copy hidden files from `{}/` to `{}`", src_dir, dest_dir);
     } else {
         let cp = run_cp_hidden_files(src_dir, dest_dir.as_str(), dest_desc, files);
 
         if is_success(&cp) {
-            println!("Copied hidden files from {}/ to {}", src_dir, dest_dir);
+            println!("Copied hidden files from `{}/` to `{}`", src_dir, dest_dir);
         } else {
-            let err_msg = format!("Could not copy hidden files from {}/ to {}", src_dir, dest_dir);
+            let err_msg = format!("Could not copy hidden files from `{}/` to `{}`", src_dir, dest_dir);
             return Err(Error::new(ErrorKind::Other, err_msg));
         }
     }
@@ -196,7 +196,7 @@ fn run_cp_hidden_files(
     files: &Vec<&str>,
 ) -> Result<Output, Error> {
     println!("\nLocal hidden files -> {}", dest_desc);
-    println!("{}", files.join(", "));
+    println!("`{}`", files.join("`, `"));
 
     let mut hidden_files: Vec<String> = Vec::new();
     for filename in files.iter() {
