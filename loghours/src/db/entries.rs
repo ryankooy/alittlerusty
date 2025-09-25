@@ -1,7 +1,6 @@
-use anyhow::Result;
 use chrono::NaiveDate;
 use rusqlite::{
-    named_params, ToSql,
+    named_params, Connection, Result, Row, ToSql,
     hooks::Action,
     types::{
         FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef
@@ -39,7 +38,7 @@ impl FromSql for DbDate {
 }
 
 impl ToSql for DbDate {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>> {
         let date: String = self.0.format("%Y-%m-%d").to_string();
         Ok(ToSqlOutput::from(date))
     }
@@ -49,59 +48,85 @@ impl ToSql for DbDate {
 pub fn get_entries_by_date_range(
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
-) -> rusqlite::Result<Vec<Entry>> {
-    let conn = create_conn().unwrap();
+) -> Result<Vec<Entry>> {
+    let mut conn = create_conn().unwrap();
 
-    let mut stmt = match (start_date, end_date) {
+    let rows = match (start_date, end_date) {
         (Some(sdate), Some(edate)) => {
-            let mut s = conn.prepare(
-                "SELECT id, date, hours FROM entry
-                WHERE @sdate <= date AND @edate > date",
-            )?;
-            s.execute(named_params! {
-                "@sdate": DbDate(sdate),
-                "@edate": DbDate(edate),
-            })?;
-            s
+            get_entries_by_sdate_and_edate(&mut conn, sdate, edate)?
         }
-        (Some(sdate), None) => {
-            let mut s = conn.prepare(
-                "SELECT id, date, hours FROM entry
-                WHERE @sdate <= date",
-            )?;
-            s.execute(named_params! { "@sdate": DbDate(sdate) })?;
-            s
-        }
-        (None, Some(edate)) => {
-            let mut s = conn.prepare(
-                "SELECT id, date, hours FROM entry
-                WHERE @edate > date",
-            )?;
-            s.execute(named_params! { "@edate": DbDate(edate) })?;
-            s
-        }
-        (None, None) => {
-            conn.prepare("SELECT id, date, hours FROM entry")?
-        }
+        (Some(sdate), None) => get_entries_by_sdate(&mut conn, sdate)?,
+        (None, Some(edate)) => get_entries_by_edate(&mut conn, edate)?,
+        (None, None) => get_all_entries(&mut conn)?,
     };
 
-    let rows = stmt.query_map([], |row| {
-        Ok(Entry {
-            id: row.get(0)?,
-            date: row.get(1)?,
-            hours: row.get(2)?,
-        })
-    })?;
+    Ok(rows)
+}
 
-    rows.collect::<rusqlite::Result<Vec<Entry>>>()
+fn get_entries_by_sdate_and_edate(
+    conn: &mut Connection,
+    sdate: NaiveDate,
+    edate: NaiveDate,
+) -> Result<Vec<Entry>> {
+    conn.prepare(
+        "SELECT id, date, hours FROM entry
+        WHERE @sdate <= date AND @edate > date",
+    )?
+    .query_map(
+        named_params! {
+            "@sdate": DbDate(sdate),
+            "@edate": DbDate(edate),
+        },
+        |row| make_entry(row),
+    )?
+    .collect::<Result<Vec<Entry>>>()
+}
+
+fn get_entries_by_sdate(
+    conn: &mut Connection,
+    sdate: NaiveDate,
+) -> Result<Vec<Entry>> {
+    conn.prepare("SELECT id, date, hours FROM entry WHERE @sdate <= date")?
+        .query_map(
+            named_params! { "@sdate": DbDate(sdate) },
+            |row| make_entry(row)
+        )?
+        .collect::<Result<Vec<Entry>>>()
+}
+
+fn get_entries_by_edate(
+    conn: &mut Connection,
+    edate: NaiveDate,
+) -> Result<Vec<Entry>> {
+    conn.prepare("SELECT id, date, hours FROM entry WHERE @edate > date")?
+        .query_map(
+            named_params! { "@edate": DbDate(edate) },
+            |row| make_entry(row)
+        )?
+        .collect::<Result<Vec<Entry>>>()
+}
+
+fn get_all_entries(conn: &mut Connection) -> Result<Vec<Entry>> {
+    conn.prepare("SELECT id, date, hours FROM entry")?
+        .query_map([], |row| make_entry(row))?
+        .collect::<Result<Vec<Entry>>>()
+}
+
+fn make_entry(row: &Row) -> Result<Entry> {
+    Ok(Entry {
+        id: row.get(0)?,
+        date: row.get(1)?,
+        hours: row.get(2)?,
+    })
 }
 
 /// Add log entry to database
 pub fn add_entry(
     date: NaiveDate,
     hours: f64,
-) -> Result<u64> {
+) -> anyhow::Result<()> {
     let conn = create_conn()?;
+
     conn.execute(
         "INSERT INTO entry (date, hours)
             VALUES (@date, @hours)",
@@ -111,13 +136,14 @@ pub fn add_entry(
         },
     )?;
 
-    Ok(conn.last_insert_rowid() as u64)
+    println!("Added entry #{}", conn.last_insert_rowid());
+    Ok(())
 }
 
 /// Remove log entries from database
 pub fn remove_entries_by_date(
     date: NaiveDate,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let conn = create_conn()?;
 
     // Register the update hook to confirm deletions

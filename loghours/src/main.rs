@@ -87,8 +87,7 @@ async fn main() -> Result<(), error::CustomError> {
         }
         Commands::Add { date, hours } => {
             let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-            let rowid = db::add_entry(d, hours)?;
-            println!("Added entry #{}", rowid);
+            db::add_entry(d, hours)?;
         }
         Commands::Remove { date } => {
             let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
@@ -198,8 +197,8 @@ async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
             util::write_file(&f, hours, DATE_FMT_STR)?;
         } else {
             // Log hours to database
-            let date = Local::now().date_naive();
-            let _ = db::add_entry(date, hours)?;
+            let today = Local::now().date_naive();
+            db::add_entry(today, hours)?;
         }
     } else {
         writeln!(stdout, "No hours logged")?;
