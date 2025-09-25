@@ -5,7 +5,8 @@ use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-pub struct Drive<'a> {
+#[derive(Debug)]
+pub struct DriveInfo<'a> {
     pub mountpoint: &'a str,
     pub drive: &'a str,
     pub dir: &'a str,
@@ -15,7 +16,7 @@ pub struct Drive<'a> {
 
 // MOUNTING
 
-pub fn mount_drive(dest: &Drive) -> Result<(), Error> {
+pub fn mount_drive(dest: &DriveInfo) -> Result<(), Error> {
     // Try to create mountpoint
     let _ = fs::create_dir(dest.mountpoint);
 
@@ -51,10 +52,10 @@ fn is_mountpoint_empty(mountpoint: &str) -> bool {
 // SYNCING
 
 pub fn sync_dirs_with_local(
-    dest: &Drive,
-    subdirs: &Vec<&str>,
+    dest: &DriveInfo,
+    subdirs: &Vec<String>,
     base_src_dir: &str,
-    hidden_files: &Vec<&str>,
+    hidden_files: &Vec<String>,
     user: &str,
     dry_run: bool,
 ) -> Result<(), Error> {
@@ -64,16 +65,18 @@ pub fn sync_dirs_with_local(
         rsync_opts.push("--dry-run");
     }
 
-    // Sync hidden files
-    if let Err(e) = copy_hidden_files(
-        base_src_dir,
-        dest.dir,
-        dest.desc,
-        &hidden_files,
-        user,
-        dry_run
-    ) {
-        return Err(e);
+    if !hidden_files.is_empty() {
+        // Sync hidden files
+        if let Err(e) = copy_hidden_files(
+            base_src_dir,
+            dest.dir,
+            dest.desc,
+            &hidden_files,
+            user,
+            dry_run
+        ) {
+            return Err(e);
+        }
     }
 
     // Sync with local subdirectories
@@ -167,7 +170,7 @@ fn copy_hidden_files(
     src_dir: &str,
     base_dest_dir: &str,
     dest_desc: &str,
-    files: &Vec<&str>,
+    files: &Vec<String>,
     user: &str,
     dry_run: bool,
 ) -> Result<(), Error> {
@@ -193,7 +196,7 @@ fn run_cp_hidden_files(
     src_dir: &str,
     dest_dir: &str,
     dest_desc: &str,
-    files: &Vec<&str>,
+    files: &Vec<String>,
 ) -> Result<Output, Error> {
     println!("\nLocal hidden files -> {}", dest_desc);
     println!("`{}`", files.join("`, `"));

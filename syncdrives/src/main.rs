@@ -1,9 +1,12 @@
 //! Drive Syncer
 
+use anyhow::Result;
 use clap::{self, Parser};
 
+mod config;
 mod util;
-use util::Drive;
+
+use util::DriveInfo;
 
 #[derive(Parser)]
 #[command(name = "Drive Syncer")]
@@ -26,26 +29,25 @@ struct Cli {
     dry_run: bool,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     let base_src_dir = format!("/home/{}", cli.user);
-    let subdirs = vec!["bin", "docs", "scripts"];
-    let hidden_files = vec![
-        ".bash_aliases", ".bashrc", ".config/nvim/init.vim", ".gitconfig",
-        ".profile", ".tmux.conf", ".tmuxp.yaml"
-    ];
     let mut sync_dest_dirs: bool = false;
 
-    // Google Drive
-    let dest_gdrv = Drive {
-        mountpoint: "/mnt/g",
-        drive: "G:",
-        dir: "/mnt/g/My Drive",
-        desc: "Google Drive",
-        err: None,
-    };
+    let cfg = config::get_config()?;
+    let subdirs: Vec<String> = cfg.subdirs;
+    let hidden_files: Vec<String> = cfg.hidden_files.unwrap_or(Vec::new());
+    let mut dest_dirs = Vec::new();
 
-    let mut dest_dirs = vec![dest_gdrv];
+    for drv_info in cfg.drives.iter() {
+        dest_dirs.push(DriveInfo {
+            mountpoint: drv_info.mountpoint.trim_end_matches('/'),
+            drive: drv_info.drive.as_str(),
+            dir: drv_info.dir.trim_end_matches('/'),
+            desc: drv_info.desc.as_str(),
+            err: None,
+        });
+    }
 
     // Get external drive info from args
     let (mountpoint, drive, dir, desc) = if let Some(letter) = cli.external_drive_letter {
@@ -67,15 +69,13 @@ fn main() {
 
     if sync_dest_dirs {
         // External drive
-        let dest_extl = Drive {
+        dest_dirs.push(DriveInfo {
             mountpoint: mountpoint.as_str(),
             drive: drive.as_str(),
             dir: dir.as_str(),
             desc: desc.as_str(),
             err: None,
-        };
-
-        dest_dirs.push(dest_extl);
+        });
     }
 
     if cli.dry_run {
@@ -132,4 +132,6 @@ fn main() {
             }
         }
     }
+
+    Ok(())
 }
