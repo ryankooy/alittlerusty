@@ -5,6 +5,7 @@
 
 use std::io;
 use anyhow;
+use chrono::format::ParseError;
 
 use crate::util::show_cursor;
 
@@ -13,6 +14,7 @@ use crate::util::show_cursor;
 pub enum CustomError {
     Os(anyhow::Error),
     Io(io::Error),
+    Parse(ParseError),
 }
 
 impl From<anyhow::Error> for CustomError {
@@ -26,5 +28,11 @@ impl From<io::Error> for CustomError {
     fn from(err: io::Error) -> Self {
         show_cursor().unwrap();
         CustomError::Io(err)
+    }
+}
+
+impl From<ParseError> for CustomError {
+    fn from(err: ParseError) -> Self {
+        CustomError::Parse(err)
     }
 }
