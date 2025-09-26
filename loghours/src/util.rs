@@ -36,7 +36,12 @@ pub fn show_cursor() -> Result<()> {
     Ok(())
 }
 
-pub fn write_file(filename: &String, hours: f64, fmt_str: &str) -> Result<()> {
+pub fn write_file(
+    filename: &String,
+    hours: f64,
+    job_name: Option<String>,
+    fmt_str: &str,
+) -> Result<()> {
     if !Path::new(filename).exists() {
         let _ = File::create(filename)
             .with_context(|| format!("Failed to create file {}", filename))?;
@@ -49,7 +54,9 @@ pub fn write_file(filename: &String, hours: f64, fmt_str: &str) -> Result<()> {
         .with_context(|| format!("Failed to open file {}", filename))?;
 
     let date = Local::now().format(fmt_str).to_string();
-    writeln!(file, "{} {:.2}", date, hours)
+    let job: String = job_name.unwrap_or("-".to_string());
+
+    writeln!(file, "{} {} {:.2}", job, date, hours)
         .with_context(|| format!("Failed to write to file {}", filename))?;
 
     Ok(())

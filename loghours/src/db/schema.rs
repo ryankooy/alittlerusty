@@ -7,12 +7,14 @@ pub fn create_schema(conn: &mut Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS entry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job TEXT NOT NULL,
             date TEXT NOT NULL,
-            hours REAL NOT NULL
+            hours REAL NOT NULL,
+            UNIQUE (job, date)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_entry_date
-            ON entry (date);
+        CREATE INDEX IF NOT EXISTS idx_entry_job
+            ON entry (job);
 
         COMMIT;",
     )?;

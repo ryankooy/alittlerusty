@@ -1,7 +1,7 @@
 //! Hours Logger
 
 use std::io::{self, Write};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{Local, NaiveDate};
 use clap::{self, Parser, Subcommand};
 use tokio::{sync::mpsc, task, time::Duration};
@@ -21,6 +21,13 @@ const DATE_FMT_STR: &str = "%Y-%m-%d";
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Nickname of job/company for which hours worked
+    ///
+    /// Note that this field is required for `add`
+    /// and `remove` commands
+    #[arg(short = 'n', long, value_name = "NICKNAME")]
+    job_name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -72,26 +79,42 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), error::CustomError> {
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Log { outfile } => log_hours(outfile).await?,
+        Commands::Log { outfile } => {
+            if !(outfile.is_none() && cli.job_name.is_none()) {
+                if let Err(_) = log_hours(outfile, cli.job_name).await {
+                    bail!("Logging error"); //FIXME
+                }
+            } else {
+                bail!("Job name required when logging hours to database");
+            }
+        }
         Commands::Read {
             file,
             start_date,
             end_date,
             rate,
         } => {
-            read_hours(file, start_date, end_date, rate)?;
+            read_hours(file, start_date, end_date, cli.job_name, rate)?;
         }
         Commands::Add { date, hours } => {
-            let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-            db::add_entry(d, hours)?;
+            if let Some(job_name) = cli.job_name {
+                let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
+                db::add_entry(d, hours, job_name)?;
+            } else {
+                bail!("Job name required for `add` operation");
+            }
         }
         Commands::Remove { date } => {
-            let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-            db::remove_entries_by_date(d)?;
+            if let Some(job_name) = cli.job_name {
+                let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
+                db::remove_entries_by_date(d, job_name)?;
+            } else {
+                bail!("Job name required for `remove` operation");
+            }
         }
     }
 
@@ -99,7 +122,10 @@ async fn main() -> Result<(), error::CustomError> {
 }
 
 /// Log hours to file and stdout.
-async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
+async fn log_hours(
+    filename: Option<String>,
+    job_name: Option<String>,
+) -> Result<(), error::CustomError> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
     // Capture stdout and get cursor's starting line number
@@ -161,7 +187,11 @@ async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
                     util::clear_line(&mut stdout, start_line)?;
 
                     if state.is_paused() {
-                        writeln!(stdout, "Paused at {:.2} hours", state.get_total_hours())?;
+                        writeln!(
+                            stdout,
+                            "Paused at {:.2} hours",
+                            state.get_total_hours()
+                        )?;
                     } else {
                         if counter == u64::MAX {
                             counter = 0;
@@ -194,11 +224,11 @@ async fn log_hours(filename: Option<String>) -> Result<(), error::CustomError> {
 
         if let Some(f) = filename {
             // Log hours to file
-            util::write_file(&f, hours, DATE_FMT_STR)?;
-        } else {
+            util::write_file(&f, hours, job_name, DATE_FMT_STR)?;
+        } else if let Some(job) = job_name {
             // Log hours to database
             let today = Local::now().date_naive();
-            db::add_entry(today, hours)?;
+            db::add_entry(today, hours, job)?;
         }
     } else {
         writeln!(stdout, "No hours logged")?;
@@ -218,6 +248,7 @@ fn read_hours(
     filename: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
+    job_name: Option<String>,
     rate: Option<u32>,
 ) -> Result<()> {
     use std::collections::BTreeMap;
@@ -227,6 +258,8 @@ fn read_hours(
 
     let mut hours_by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
     let mut total_hours: f64 = 0.0;
+    let by_job: bool = job_name.is_some();
+    let job: String = job_name.clone().unwrap_or(String::new());
 
     let (sdate, edate) = util::parse_dates(start_date, end_date, DATE_FMT_STR)?;
     util::print_timeframe(sdate, edate);
@@ -238,9 +271,19 @@ fn read_hours(
 
         // Read file and sum hours
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Some((date_str, hours_str)) = line.split_once(' ') {
-                let hours: f64 = hours_str.parse::<f64>()?;
-                let date = NaiveDate::parse_from_str(date_str, DATE_FMT_STR)?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut parts = line.split_whitespace();
+            let job_str = parts.next().unwrap();
+
+            if !(by_job && job_str != job) {
+                let date = NaiveDate::parse_from_str(
+                    parts.next().unwrap(), DATE_FMT_STR
+                )?;
+                let hours: f64 = parts.next().unwrap().parse::<f64>()?;
 
                 if util::within_date_range(date, sdate, edate) {
                     *hours_by_day.entry(date).or_insert(0.0f64) += hours;
@@ -250,16 +293,22 @@ fn read_hours(
         }
     } else {
         // Read hours from database
-        let entries = db::get_entries_by_date_range(sdate, edate)?;
+        let entries = db::get_entries_by_date_range(sdate, edate, job_name)?;
 
         for entry in entries.iter() {
-            *hours_by_day.entry(entry.date.date_naive()).or_insert(0.0f64) += entry.hours;
+            *hours_by_day
+                .entry(entry.date.date_naive())
+                .or_insert(0.0f64) += entry.hours;
+
             total_hours += entry.hours;
         }
     }
 
     // Print summary
     if !hours_by_day.is_empty() {
+        if !job.is_empty() {
+            println!("For: {}", job);
+        }
         println!("Daily hours worked:\n{:#?}", hours_by_day);
         println!("Total hours worked: {:.2}", total_hours);
 

@@ -23,6 +23,7 @@ impl DbDate {
 #[allow(dead_code)]
 pub struct Entry {
     pub id: i32,
+    pub job: String,
     pub date: DbDate,
     pub hours: f64,
 }
@@ -48,16 +49,17 @@ impl ToSql for DbDate {
 pub fn get_entries_by_date_range(
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
+    job_name: Option<String>,
 ) -> Result<Vec<Entry>> {
     let mut conn = create_conn().unwrap();
 
     let rows = match (start_date, end_date) {
         (Some(sdate), Some(edate)) => {
-            get_entries_by_sdate_and_edate(&mut conn, sdate, edate)?
+            get_entries_by_sdate_and_edate(&mut conn, sdate, edate, job_name)?
         }
-        (Some(sdate), None) => get_entries_by_sdate(&mut conn, sdate)?,
-        (None, Some(edate)) => get_entries_by_edate(&mut conn, edate)?,
-        (None, None) => get_all_entries(&mut conn)?,
+        (Some(sdate), None) => get_entries_by_sdate(&mut conn, sdate, job_name)?,
+        (None, Some(edate)) => get_entries_by_edate(&mut conn, edate, job_name)?,
+        (None, None) => get_all_entries(&mut conn, job_name)?,
     };
 
     Ok(rows)
@@ -67,56 +69,125 @@ fn get_entries_by_sdate_and_edate(
     conn: &mut Connection,
     sdate: NaiveDate,
     edate: NaiveDate,
+    job_name: Option<String>,
 ) -> Result<Vec<Entry>> {
-    conn.prepare(
-        "SELECT id, date, hours FROM entry
-        WHERE @sdate <= date AND @edate > date",
-    )?
-    .query_map(
-        named_params! {
-            "@sdate": DbDate(sdate),
-            "@edate": DbDate(edate),
-        },
-        |row| make_entry(row),
-    )?
-    .collect::<Result<Vec<Entry>>>()
+    if let Some(job) = job_name {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE date >= @sdate AND date < @edate
+                AND job LIKE @job
+            ORDER BY date",
+        )?
+        .query_map(
+            named_params! {
+                "@sdate": DbDate(sdate),
+                "@edate": DbDate(edate),
+                "@job": job,
+            },
+            |row| make_entry(row),
+        )?
+        .collect::<Result<Vec<Entry>>>()
+    } else {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE date >= @sdate AND date < @edate
+            ORDER BY date",
+        )?
+        .query_map(
+            named_params! {
+                "@sdate": DbDate(sdate),
+                "@edate": DbDate(edate),
+            },
+            |row| make_entry(row),
+        )?
+        .collect::<Result<Vec<Entry>>>()
+    }
 }
 
 fn get_entries_by_sdate(
     conn: &mut Connection,
     sdate: NaiveDate,
+    job_name: Option<String>,
 ) -> Result<Vec<Entry>> {
-    conn.prepare("SELECT id, date, hours FROM entry WHERE @sdate <= date")?
+    if let Some(job) = job_name {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+             WHERE date >= @sdate AND job LIKE @job
+             ORDER BY date",
+         )?
+        .query_map(
+            named_params! { "@sdate": DbDate(sdate), "@job": job },
+            |row| make_entry(row)
+        )?
+        .collect::<Result<Vec<Entry>>>()
+    } else {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE date >= @sdate ORDER BY date",
+        )?
         .query_map(
             named_params! { "@sdate": DbDate(sdate) },
             |row| make_entry(row)
         )?
         .collect::<Result<Vec<Entry>>>()
+    }
 }
 
 fn get_entries_by_edate(
     conn: &mut Connection,
     edate: NaiveDate,
+    job_name: Option<String>,
 ) -> Result<Vec<Entry>> {
-    conn.prepare("SELECT id, date, hours FROM entry WHERE @edate > date")?
+    if let Some(job) = job_name {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE date < @edate AND job LIKE @job
+            ORDER BY date",
+        )?
+        .query_map(
+            named_params! { "@edate": DbDate(edate), "@job": job },
+            |row| make_entry(row)
+        )?
+        .collect::<Result<Vec<Entry>>>()
+    } else {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE date < @edate ORDER BY date",
+        )?
         .query_map(
             named_params! { "@edate": DbDate(edate) },
             |row| make_entry(row)
         )?
         .collect::<Result<Vec<Entry>>>()
+    }
 }
 
-fn get_all_entries(conn: &mut Connection) -> Result<Vec<Entry>> {
-    conn.prepare("SELECT id, date, hours FROM entry")?
+fn get_all_entries(
+    conn: &mut Connection,
+    job_name: Option<String>,
+) -> Result<Vec<Entry>> {
+    if let Some(job) = job_name {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry
+            WHERE job LIKE @job ORDER BY date",
+        )?
+        .query_map(named_params! { "@job": job }, |row| make_entry(row))?
+        .collect::<Result<Vec<Entry>>>()
+    } else {
+        conn.prepare(
+            "SELECT id, job, date, hours FROM entry ORDER BY date",
+        )?
         .query_map([], |row| make_entry(row))?
         .collect::<Result<Vec<Entry>>>()
+    }
 }
 
 fn make_entry(row: &Row) -> Result<Entry> {
     Ok(Entry {
         id: row.get(0)?,
-        date: row.get(1)?,
-        hours: row.get(2)?,
+        job: row.get(1)?,
+        date: row.get(2)?,
+        hours: row.get(3)?,
     })
 }
 
@@ -124,25 +195,31 @@ fn make_entry(row: &Row) -> Result<Entry> {
 pub fn add_entry(
     date: NaiveDate,
     hours: f64,
+    job: String,
 ) -> anyhow::Result<()> {
     let conn = create_conn()?;
 
     conn.execute(
-        "INSERT INTO entry (date, hours)
-            VALUES (@date, @hours)",
+        "INSERT INTO entry (job, date, hours)
+            VALUES (@job, @date, @hours)
+            ON CONFLICT (job, date) DO UPDATE SET
+                hours = EXCLUDED.hours + @hours",
         named_params! {
+            "@job": job,
             "@date": DbDate(date),
             "@hours": hours,
         },
     )?;
 
     println!("Added entry #{}", conn.last_insert_rowid());
+
     Ok(())
 }
 
 /// Remove log entries from database
 pub fn remove_entries_by_date(
     date: NaiveDate,
+    job: String,
 ) -> anyhow::Result<()> {
     let conn = create_conn()?;
 
@@ -153,10 +230,10 @@ pub fn remove_entries_by_date(
         }
     }));
 
-    // Delete entries of specified dates
+    // Delete entries of specified job names + dates
     conn.execute(
-        "DELETE FROM entry WHERE date = @date",
-        named_params! { "@date": DbDate(date) },
+        "DELETE FROM entry WHERE date = @date AND job = @job",
+        named_params! { "@date": DbDate(date), "@job": job },
     )?;
 
     Ok(())
