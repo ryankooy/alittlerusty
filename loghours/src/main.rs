@@ -57,6 +57,10 @@ enum Commands {
         /// Hourly pay rate
         #[arg(short, long)]
         rate: Option<u32>,
+
+        /// Whether to round up a day's total hours
+        #[arg(short = 'u', long)]
+        round_up: bool,
     },
 
     /// Add log entry to database
@@ -95,8 +99,9 @@ async fn main() -> Result<()> {
             start_date,
             end_date,
             rate,
+            round_up,
         } => {
-            read_hours(file, start_date, end_date, cli.job_name, rate)?;
+            read_hours(file, start_date, end_date, cli.job_name, rate, round_up)?;
         }
         Commands::Add { date, hours } => {
             if let Some(job_name) = cli.job_name {
@@ -248,6 +253,7 @@ fn read_hours(
     end_date: Option<String>,
     job_name: Option<String>,
     rate: Option<u32>,
+    round_up: bool,
 ) -> Result<()> {
     use std::collections::BTreeMap;
     use std::fs::File;
@@ -305,7 +311,11 @@ fn read_hours(
     if !hours_map.is_empty() {
         println!("JOB\t\tDATE\t\tHOURS");
         for ((j, d), h) in hours_map.iter() {
-            println!("{}\t\t{}\t{:.2}", j, d, h);
+            if round_up {
+                println!("{}\t\t{}\t{}", j, d, h.ceil());
+            } else {
+                println!("{}\t\t{}\t{:.2}", j, d, h);
+            }
         }
         println!();
 
