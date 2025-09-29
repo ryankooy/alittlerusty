@@ -201,9 +201,7 @@ pub fn add_entry(
 
     conn.execute(
         "INSERT INTO entry (job, date, hours)
-            VALUES (@job, @date, @hours)
-            ON CONFLICT (job, date) DO UPDATE SET
-                hours = EXCLUDED.hours + @hours",
+            VALUES (@job, @date, @hours)",
         named_params! {
             "@job": job,
             "@date": DbDate(date),

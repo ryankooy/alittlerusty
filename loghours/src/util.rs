@@ -1,16 +1,30 @@
 //! Utility functions for Hours Logger
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Stdout, Write};
+use std::io::{Stdout, Write};
 use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate};
 use termion::clear;
 use termion::cursor::{self, DetectCursorPos};
-use termion::raw::{IntoRawMode, RawTerminal};
+use termion::raw::RawTerminal;
+
+/// Wrapper for RawTerminal ensuring cursor shown upon drop
+pub struct TerminalRestorer(pub RawTerminal<Stdout>);
+
+impl Drop for TerminalRestorer {
+    fn drop(&mut self) {
+        write!(self.0, "{}", cursor::Show)
+            .ok()
+            .expect("Failed to show cursor on drop");
+        self.0.flush().ok().expect("Failed to flush on drop");
+    }
+}
 
 pub fn get_cursor_start_line(stdout: &mut RawTerminal<Stdout>) -> Result<u16> {
-    let y_pos: u16 = stdout.cursor_pos()?.1;
+    let pos = stdout.cursor_pos()?;
+    stdout.flush()?;
+    let y_pos: u16 = pos.1;
     Ok(y_pos - 1)
 }
 
@@ -26,13 +40,9 @@ pub fn hide_cursor(stdout: &mut RawTerminal<Stdout>) -> Result<()> {
     Ok(())
 }
 
-pub fn show_cursor() -> Result<()> {
-    let mut stdout = io::stdout().into_raw_mode()?;
-    let start_line: u16 = get_cursor_start_line(&mut stdout)?;
-
+pub fn show_cursor(stdout: &mut RawTerminal<Stdout>) -> Result<()> {
     write!(stdout, "{}", cursor::Show)?;
-    clear_line(&mut stdout, start_line)?;
-
+    stdout.flush()?;
     Ok(())
 }
 

@@ -7,11 +7,11 @@ use clap::{self, Parser, Subcommand};
 use tokio::{sync::mpsc, task, time::Duration};
 
 mod db;
-mod error;
 mod state;
 mod util;
 
 use state::{LogCommand as Command, LogState};
+use util::TerminalRestorer;
 
 const DATE_FMT_STR: &str = "%Y-%m-%d";
 
@@ -85,9 +85,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Log { outfile } => {
             if !(outfile.is_none() && cli.job_name.is_none()) {
-                if let Err(_) = log_hours(outfile, cli.job_name).await {
-                    bail!("Logging error"); //FIXME
-                }
+                log_hours(outfile, cli.job_name).await?;
             } else {
                 bail!("Job name required when logging hours to database");
             }
@@ -125,20 +123,21 @@ async fn main() -> Result<()> {
 async fn log_hours(
     filename: Option<String>,
     job_name: Option<String>,
-) -> Result<(), error::CustomError> {
+) -> Result<()> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
     // Capture stdout and get cursor's starting line number
-    let mut stdout = io::stdout().into_raw_mode()?;
-    let start_line: u16 = util::get_cursor_start_line(&mut stdout)?;
+    let stdout = io::stdout().into_raw_mode()?;
+    let mut stdout = TerminalRestorer(stdout);
+    let start_line: u16 = util::get_cursor_start_line(&mut stdout.0)?;
 
-    writeln!(stdout, "[S] Start, [P] Pause, [R] Resume, [Space] Toggle Pause, [Q] Quit\n")?;
-    util::hide_cursor(&mut stdout)?;
+    writeln!(stdout.0, "[S] Start, [P] Pause, [R] Resume, [Space] Toggle Pause, [Q] Quit\n")?;
+    util::hide_cursor(&mut stdout.0)?;
 
     let (tx, mut rx) = mpsc::channel::<Command>(100);
 
     // Key handler
-    let input_handle = task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let mut keys = io::stdin().keys();
 
         while let Some(Ok(key)) = keys.next() {
@@ -184,11 +183,11 @@ async fn log_hours(
                 // No input received, so write some stuff to stdout
                 // if LogState is active
                 if state.is_running() {
-                    util::clear_line(&mut stdout, start_line)?;
+                    util::clear_line(&mut stdout.0, start_line)?;
 
                     if state.is_paused() {
                         writeln!(
-                            stdout,
+                            stdout.0,
                             "Paused at {:.2} hours",
                             state.get_total_hours()
                         )?;
@@ -199,28 +198,27 @@ async fn log_hours(
                         counter += 1;
 
                         writeln!(
-                            stdout,
+                            stdout.0,
                             "{} min {}",
                             state.get_total_minutes(),
                             "★".repeat((counter % 20) as usize + 1)
                         )?;
 
-                        util::clear_line(&mut stdout, start_line + 1)?;
+                        util::clear_line(&mut stdout.0, start_line + 1)?;
                     }
                 }
             }
         }
     }
 
-    input_handle.await.unwrap();
-    util::clear_line(&mut stdout, start_line)?;
-    util::show_cursor()?;
+    util::clear_line(&mut stdout.0, start_line - 1)?;
+    util::show_cursor(&mut stdout.0)?;
 
     let hours: f64 = state.get_total_hours();
 
     // If hours were accrued, log them to given file and stdout
     if hours >= 0.01 {
-        writeln!(stdout, "Hours logged: {:.2}", hours)?;
+        writeln!(stdout.0, "Hours logged: {:.2}", hours)?;
 
         if let Some(f) = filename {
             // Log hours to file
@@ -231,10 +229,10 @@ async fn log_hours(
             db::add_entry(today, hours, job)?;
         }
     } else {
-        writeln!(stdout, "No hours logged")?;
+        writeln!(stdout.0, "No hours logged")?;
     }
 
-    util::clear_line(&mut stdout, start_line)?;
+    util::clear_line(&mut stdout.0, start_line)?;
 
     Ok(())
 }
@@ -256,7 +254,7 @@ fn read_hours(
     use std::io::{BufRead, BufReader};
     use anyhow::Context;
 
-    let mut hours_by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
+    let mut hours_map: BTreeMap<(String, NaiveDate), f64> = BTreeMap::new();
     let mut total_hours: f64 = 0.0;
     let by_job: bool = job_name.is_some();
     let job: String = job_name.clone().unwrap_or(String::new());
@@ -286,7 +284,8 @@ fn read_hours(
                 let hours: f64 = parts.next().unwrap().parse::<f64>()?;
 
                 if util::within_date_range(date, sdate, edate) {
-                    *hours_by_day.entry(date).or_insert(0.0f64) += hours;
+                    *hours_map.entry((job_str.to_string(), date))
+                        .or_insert(0.0f64) += hours;
                     total_hours += hours;
                 }
             }
@@ -296,20 +295,20 @@ fn read_hours(
         let entries = db::get_entries_by_date_range(sdate, edate, job_name)?;
 
         for entry in entries.iter() {
-            *hours_by_day
-                .entry(entry.date.date_naive())
+            *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
                 .or_insert(0.0f64) += entry.hours;
-
             total_hours += entry.hours;
         }
     }
 
     // Print summary
-    if !hours_by_day.is_empty() {
-        if !job.is_empty() {
-            println!("For: {}", job);
+    if !hours_map.is_empty() {
+        println!("JOB\t\tDATE\t\tHOURS");
+        for ((j, d), h) in hours_map.iter() {
+            println!("{}\t\t{}\t{:.2}", j, d, h);
         }
-        println!("Daily hours worked:\n{:#?}", hours_by_day);
+        println!();
+
         println!("Total hours worked: {:.2}", total_hours);
 
         if let Some(hourly_rate) = rate {
