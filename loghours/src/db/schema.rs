@@ -9,7 +9,8 @@ pub fn create_schema(conn: &mut Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             job TEXT NOT NULL,
             date TEXT NOT NULL,
-            hours REAL NOT NULL
+            hours REAL NOT NULL,
+            CONSTRAINT unique_job_date_hours UNIQUE (job, date, hours)
         );
 
         CREATE INDEX IF NOT EXISTS idx_entry_job

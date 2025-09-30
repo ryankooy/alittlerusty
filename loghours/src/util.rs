@@ -1,13 +1,19 @@
 //! Utility functions for Hours Logger
 
 use std::fs::{File, OpenOptions};
-use std::io::{Stdout, Write};
+use std::io::{BufRead, BufReader, Lines, Stdout, Write};
 use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local, NaiveDate};
 use termion::clear;
 use termion::cursor::{self, DetectCursorPos};
 use termion::raw::RawTerminal;
+
+pub struct Entry {
+    pub job: String,
+    pub date: NaiveDate,
+    pub hours: f64,
+}
 
 /// Wrapper for RawTerminal ensuring cursor shown upon drop
 pub struct TerminalRestorer(pub RawTerminal<Stdout>);
@@ -123,5 +129,35 @@ pub fn print_timeframe(start_date: Option<NaiveDate>, end_date: Option<NaiveDate
         (Some(sdate), None) => println!("Since {}", sdate.format(full_date_fmt)),
         (None, Some(edate)) => println!("Before {}", edate.format(full_date_fmt)),
         (None, None) => println!("All time"),
+    }
+}
+
+pub fn read_lines(filename: &String) -> anyhow::Result<Lines<BufReader<File>>> {
+    // Open file
+    let file = File::open(&filename)
+        .with_context(|| format!("Failed to open file {}", filename))?;
+
+    // Read and return lines from file
+    Ok(BufReader::new(file).lines())
+}
+
+pub fn entry_from_line(line: String, date_fmt_str: &str) -> Result<Option<Entry>> {
+    let line = line.trim();
+
+    if !line.is_empty() {
+        let mut parts = line.split_whitespace();
+        let job = parts.next().unwrap();
+        let date = NaiveDate::parse_from_str(
+            parts.next().unwrap(), date_fmt_str,
+        )?;
+        let hours: f64 = parts.next().unwrap().parse::<f64>()?;
+
+        Ok(Some(Entry {
+            job: job.to_string(),
+            date,
+            hours,
+        }))
+    } else {
+        Ok(None)
     }
 }

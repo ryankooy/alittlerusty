@@ -21,7 +21,7 @@ impl DbDate {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct Entry {
+pub struct DbEntry {
     pub id: i32,
     pub job: String,
     pub date: DbDate,
@@ -50,7 +50,7 @@ pub fn get_entries_by_date_range(
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
     job_name: Option<String>,
-) -> Result<Vec<Entry>> {
+) -> Result<Vec<DbEntry>> {
     let mut conn = create_conn().unwrap();
 
     let rows = match (start_date, end_date) {
@@ -70,7 +70,7 @@ fn get_entries_by_sdate_and_edate(
     sdate: NaiveDate,
     edate: NaiveDate,
     job_name: Option<String>,
-) -> Result<Vec<Entry>> {
+) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -86,7 +86,7 @@ fn get_entries_by_sdate_and_edate(
             },
             |row| make_entry(row),
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -100,7 +100,7 @@ fn get_entries_by_sdate_and_edate(
             },
             |row| make_entry(row),
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
@@ -108,7 +108,7 @@ fn get_entries_by_sdate(
     conn: &mut Connection,
     sdate: NaiveDate,
     job_name: Option<String>,
-) -> Result<Vec<Entry>> {
+) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -119,7 +119,7 @@ fn get_entries_by_sdate(
             named_params! { "@sdate": DbDate(sdate), "@job": job },
             |row| make_entry(row)
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -129,7 +129,7 @@ fn get_entries_by_sdate(
             named_params! { "@sdate": DbDate(sdate) },
             |row| make_entry(row)
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
@@ -137,7 +137,7 @@ fn get_entries_by_edate(
     conn: &mut Connection,
     edate: NaiveDate,
     job_name: Option<String>,
-) -> Result<Vec<Entry>> {
+) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -148,7 +148,7 @@ fn get_entries_by_edate(
             named_params! { "@edate": DbDate(edate), "@job": job },
             |row| make_entry(row)
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
@@ -158,32 +158,32 @@ fn get_entries_by_edate(
             named_params! { "@edate": DbDate(edate) },
             |row| make_entry(row)
         )?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
 fn get_all_entries(
     conn: &mut Connection,
     job_name: Option<String>,
-) -> Result<Vec<Entry>> {
+) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry
             WHERE job LIKE @job ORDER BY date",
         )?
         .query_map(named_params! { "@job": job }, |row| make_entry(row))?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
             "SELECT id, job, date, hours FROM entry ORDER BY date",
         )?
         .query_map([], |row| make_entry(row))?
-        .collect::<Result<Vec<Entry>>>()
+        .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
-fn make_entry(row: &Row) -> Result<Entry> {
-    Ok(Entry {
+fn make_entry(row: &Row) -> Result<DbEntry> {
+    Ok(DbEntry {
         id: row.get(0)?,
         job: row.get(1)?,
         date: row.get(2)?,
@@ -193,14 +193,18 @@ fn make_entry(row: &Row) -> Result<Entry> {
 
 /// Add log entry to database
 pub fn add_entry(
+    connection: Option<&mut Connection>,
     date: NaiveDate,
     hours: f64,
     job: String,
 ) -> anyhow::Result<()> {
-    let conn = create_conn()?;
+    let conn = match connection {
+        None => &mut create_conn()?,
+        Some(c) => c,
+    };
 
     conn.execute(
-        "INSERT INTO entry (job, date, hours)
+        "INSERT OR IGNORE INTO entry (job, date, hours)
             VALUES (@job, @date, @hours)",
         named_params! {
             "@job": job,
@@ -209,16 +213,18 @@ pub fn add_entry(
         },
     )?;
 
-    println!("Added entry #{}", conn.last_insert_rowid());
+    let rowid = conn.last_insert_rowid();
+    if rowid != 0 {
+        println!("Added entry #{}", rowid);
+    } else {
+        println!("Duplicate entry");
+    }
 
     Ok(())
 }
 
 /// Remove log entries from database
-pub fn remove_entries_by_date(
-    date: NaiveDate,
-    job: String,
-) -> anyhow::Result<()> {
+pub fn remove_entry_by_id(id: i64) -> anyhow::Result<()> {
     let conn = create_conn()?;
 
     // Register the update hook to confirm deletions
@@ -230,8 +236,8 @@ pub fn remove_entries_by_date(
 
     // Delete entries of specified job names + dates
     conn.execute(
-        "DELETE FROM entry WHERE date = @date AND job = @job",
-        named_params! { "@date": DbDate(date), "@job": job },
+        "DELETE FROM entry WHERE id = @id",
+        named_params! { "@id": id },
     )?;
 
     Ok(())

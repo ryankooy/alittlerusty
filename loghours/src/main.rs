@@ -1,5 +1,6 @@
 //! Hours Logger
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use anyhow::{bail, Result};
 use chrono::{Local, NaiveDate};
@@ -61,6 +62,10 @@ enum Commands {
         /// Whether to round up a day's total hours
         #[arg(short = 'u', long)]
         round_up: bool,
+
+        /// Show raw database log entries (including `id` column)
+        #[arg(short = 'i', long)]
+        show_raw_entries: bool,
     },
 
     /// Add log entry to database
@@ -74,12 +79,19 @@ enum Commands {
         hours: f64,
     },
 
-    /// Delete log entries from database
+    /// Delete log entry from database
     Remove {
-        /// Date of entries to delete ('YYYY-mm-dd')
-        #[arg(short, long)]
-        date: String,
+        /// Id of entry to delete
+        #[arg(short = 'i', long)]
+        entry_id: i64,
     },
+
+    /// Import log entries from file to database
+    Import {
+        /// File from which to import hours
+        #[arg(short, long)]
+        file: String,
+    }
 }
 
 #[tokio::main]
@@ -100,25 +112,23 @@ async fn main() -> Result<()> {
             end_date,
             rate,
             round_up,
+            show_raw_entries,
         } => {
-            read_hours(file, start_date, end_date, cli.job_name, rate, round_up)?;
+            read_hours(
+                file, start_date, end_date, cli.job_name,
+                rate, round_up, show_raw_entries,
+            )?;
         }
         Commands::Add { date, hours } => {
             if let Some(job_name) = cli.job_name {
                 let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-                db::add_entry(d, hours, job_name)?;
+                db::add_entry(None, d, hours, job_name)?;
             } else {
                 bail!("Job name required for `add` operation");
             }
         }
-        Commands::Remove { date } => {
-            if let Some(job_name) = cli.job_name {
-                let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-                db::remove_entries_by_date(d, job_name)?;
-            } else {
-                bail!("Job name required for `remove` operation");
-            }
-        }
+        Commands::Remove { entry_id } => db::remove_entry_by_id(entry_id)?,
+        Commands::Import { file } => import_hours(file, cli.job_name)?,
     }
 
     Ok(())
@@ -231,7 +241,7 @@ async fn log_hours(
         } else if let Some(job) = job_name {
             // Log hours to database
             let today = Local::now().date_naive();
-            db::add_entry(today, hours, job)?;
+            db::add_entry(None, today, hours, job)?;
         }
     } else {
         writeln!(stdout.0, "No hours logged")?;
@@ -254,45 +264,27 @@ fn read_hours(
     job_name: Option<String>,
     rate: Option<u32>,
     round_up: bool,
+    show_raw_entries: bool,
 ) -> Result<()> {
-    use std::collections::BTreeMap;
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-    use anyhow::Context;
-
     let mut hours_map: BTreeMap<(String, NaiveDate), f64> = BTreeMap::new();
     let mut total_hours: f64 = 0.0;
     let by_job: bool = job_name.is_some();
-    let job: String = job_name.clone().unwrap_or(String::new());
+    let job: String = job_name.clone().unwrap_or(String::from("-"));
+    let mut raw_entries = Vec::new();
 
     let (sdate, edate) = util::parse_dates(start_date, end_date, DATE_FMT_STR)?;
     util::print_timeframe(sdate, edate);
 
     if let Some(f) = filename {
-        // Open file
-        let file = File::open(&f)
-            .with_context(|| format!("Failed to open file {}", f))?;
-
         // Read file and sum hours
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            let mut parts = line.split_whitespace();
-            let job_str = parts.next().unwrap();
-
-            if !(by_job && job_str != job) {
-                let date = NaiveDate::parse_from_str(
-                    parts.next().unwrap(), DATE_FMT_STR
-                )?;
-                let hours: f64 = parts.next().unwrap().parse::<f64>()?;
-
-                if util::within_date_range(date, sdate, edate) {
-                    *hours_map.entry((job_str.to_string(), date))
-                        .or_insert(0.0f64) += hours;
-                    total_hours += hours;
+        for line in util::read_lines(&f)?.map_while(Result::ok) {
+            if let Some(entry) = util::entry_from_line(line, DATE_FMT_STR)? {
+                if !(by_job && entry.job != job) &&
+                    util::within_date_range(entry.date, sdate, edate)
+                {
+                    *hours_map.entry((entry.job, entry.date))
+                        .or_insert(0.0f64) += entry.hours;
+                    total_hours += entry.hours;
                 }
             }
         }
@@ -301,9 +293,18 @@ fn read_hours(
         let entries = db::get_entries_by_date_range(sdate, edate, job_name)?;
 
         for entry in entries.iter() {
-            *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
-                .or_insert(0.0f64) += entry.hours;
-            total_hours += entry.hours;
+            if show_raw_entries {
+                raw_entries.push((
+                    entry.id,
+                    entry.job.clone(),
+                    entry.date.date_naive(),
+                    entry.hours,
+                ));
+            } else {
+                *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
+                    .or_insert(0.0f64) += entry.hours;
+                total_hours += entry.hours;
+            }
         }
     }
 
@@ -325,8 +326,31 @@ fn read_hours(
             let pay: f64 = (hourly_rate as f64) * total_hours;
             println!("Gross wage: ${:.2}", pay);
         }
+    } else if show_raw_entries {
+        println!("ID\tJOB\t\tDATE\t\tHOURS");
+        for (i, j, d, h) in raw_entries.iter() {
+            println!("{}\t{}\t\t{}\t{}", i, j, d, h);
+        }
     } else {
         println!("No hours worked");
+    }
+
+    Ok(())
+}
+
+/// Import entries from file into database
+fn import_hours(filename: String, job_name: Option<String>) -> Result<()> {
+    let mut conn = db::create_conn()?;
+    let by_job: bool = job_name.is_some();
+    let job: String = job_name.clone().unwrap_or(String::from("-"));
+
+    for line in util::read_lines(&filename)?.map_while(Result::ok) {
+        if let Some(entry) = util::entry_from_line(line, DATE_FMT_STR)? {
+            if !(by_job && entry.job != job) {
+                println!("Importing entry ({} {} {})", entry.job, entry.date, entry.hours);
+                db::add_entry(Some(&mut conn), entry.date, entry.hours, entry.job)?;
+            }
+        }
     }
 
     Ok(())
