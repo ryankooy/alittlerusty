@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use anyhow::{bail, Result};
 
 #[derive(Debug)]
 pub struct DriveInfo<'a> {
@@ -11,12 +12,27 @@ pub struct DriveInfo<'a> {
     pub drive: &'a str,
     pub dir: &'a str,
     pub desc: &'a str,
-    pub err: Option<&'a str>,
+    pub err: Option<DestError>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum DestError {
+    MountError,
+    SyncError,
+}
+
+impl DestError {
+    pub fn kind(&self) -> String {
+        match self {
+            DestError::MountError => "mount".to_string(),
+            DestError::SyncError => "sync".to_string(),
+        }
+    }
 }
 
 // MOUNTING
 
-pub fn mount_drive(dest: &DriveInfo) -> Result<(), Error> {
+pub fn mount_drive(dest: &mut DriveInfo) -> Result<()> {
     // Try to create mountpoint
     let _ = fs::create_dir(dest.mountpoint);
 
@@ -27,8 +43,8 @@ pub fn mount_drive(dest: &DriveInfo) -> Result<(), Error> {
             .output();
 
         if !is_success(&mount) {
-            let err_msg = format!("Could not mount {} at {}", dest.drive, dest.mountpoint);
-            return Err(Error::new(ErrorKind::NotFound, err_msg));
+            dest.err = Some(DestError::MountError);
+            bail!("Failed to mount {} at {}", dest.drive, dest.mountpoint);
         }
     }
 
@@ -52,13 +68,13 @@ fn is_mountpoint_empty(mountpoint: &str) -> bool {
 // SYNCING
 
 pub fn sync_dirs_with_local(
-    dest: &DriveInfo,
+    dest: &mut DriveInfo,
     subdirs: &Vec<String>,
     base_src_dir: &str,
     hidden_files: &Vec<String>,
     user: &str,
     dry_run: bool,
-) -> Result<(), Error> {
+) -> Result<()> {
     let mut rsync_opts = vec!["-a", "--no-links", "--itemize-changes", "--update"];
 
     if dry_run {
@@ -75,7 +91,8 @@ pub fn sync_dirs_with_local(
             user,
             dry_run
         ) {
-            return Err(e);
+            dest.err = Some(DestError::SyncError);
+            bail!("{}", e);
         }
     }
 
@@ -102,8 +119,8 @@ pub fn sync_dirs_with_local(
                 println!("Synced `{}` with `{}`", dest_dir, src_dir);
             }
         } else {
-            let err_msg = format!("Could not sync `{}` with `{}`", dest_dir, src_dir);
-            return Err(Error::new(ErrorKind::Other, err_msg));
+            dest.err = Some(DestError::SyncError);
+            bail!("Failed to sync `{}` with `{}`", dest_dir, src_dir);
         }
     }
 
@@ -116,7 +133,7 @@ pub fn sync_dir(
     src_desc: &str,
     dest_desc: &str,
     dry_run: bool,
-) -> Result<(), Error> {
+) -> Result<()> {
     let mut rsync_opts = vec!["--itemize-changes", "--recursive", "--ignore-existing"];
 
     if dry_run {
@@ -137,8 +154,7 @@ pub fn sync_dir(
             println!("Synced `{}` with `{}`", dest_dir, src_dir);
         }
     } else {
-        let err_msg = format!("Could not sync {} with {}", dest_dir, src_dir);
-        return Err(Error::new(ErrorKind::Other, err_msg));
+        bail!("Failed to sync `{}` with `{}`", dest_dir, src_dir);
     }
 
     Ok(())
@@ -173,7 +189,7 @@ fn copy_hidden_files(
     files: &Vec<String>,
     user: &str,
     dry_run: bool,
-) -> Result<(), Error> {
+) -> Result<()> {
     let dest_dir = format!("{}/wsl/{}/", base_dest_dir, user);
 
     if dry_run {
@@ -184,8 +200,7 @@ fn copy_hidden_files(
         if is_success(&cp) {
             println!("Copied hidden files from `{}/` to `{}`", src_dir, dest_dir);
         } else {
-            let err_msg = format!("Could not copy hidden files from `{}/` to `{}`", src_dir, dest_dir);
-            return Err(Error::new(ErrorKind::Other, err_msg));
+            bail!("Could not copy hidden files from `{}/` to `{}`", src_dir, dest_dir);
         }
     }
 
