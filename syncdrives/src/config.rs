@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -7,6 +8,7 @@ pub struct Config {
     pub subdirs: Vec<String>,
     pub hidden_files: Option<Vec<String>>,
     pub drives: Vec<Drive>,
+    pub gd_folder_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,7 +24,7 @@ pub fn get_config() -> Result<Config> {
         .iter()
         .collect();
 
-    let cfg_str = std::fs::read_to_string(&path)
+    let cfg_str = fs::read_to_string(&path)
         .with_context(|| {
             format!("Failed to read config file {}", path.display())
         })?;
