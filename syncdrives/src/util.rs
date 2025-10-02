@@ -69,8 +69,8 @@ fn is_mountpoint_empty(mountpoint: &str) -> bool {
 
 pub fn sync_dirs_with_local(
     dest: &mut DriveInfo,
-    subdirs: &Vec<String>,
     base_src_dir: &str,
+    subdirs: &Vec<String>,
     hidden_files: &Vec<String>,
     user: &str,
     dry_run: bool,

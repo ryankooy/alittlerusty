@@ -1,3 +1,5 @@
+//! Connect with and upload file to Google Drive using their API
+
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -40,6 +42,7 @@ impl From<InstalledApp> for ApplicationSecret {
     }
 }
 
+/// Read and parse GD API credentials from JSON file.
 fn get_gdapi_config() -> Result<GDApiConfig> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "client_secrets.json"]
         .iter()
@@ -54,6 +57,7 @@ fn get_gdapi_config() -> Result<GDApiConfig> {
     Ok(config)
 }
 
+/// Connect to Google Drive and return hub for accessing it.
 pub async fn get_drivehub() -> Result<DriveHub<HttpsConnector<HttpConnector>>> {
     let config: GDApiConfig = get_gdapi_config()?;
     let secret: ApplicationSecret = config.installed.into();
@@ -77,6 +81,7 @@ pub async fn get_drivehub() -> Result<DriveHub<HttpsConnector<HttpConnector>>> {
     Ok(DriveHub::new(client, auth))
 }
 
+/// Upload a single file to Google Drive.
 pub async fn upload_file_to_drive(
     hub: &DriveHub<HttpsConnector<HttpConnector>>,
     file_path: &str,

@@ -19,6 +19,7 @@ pub struct Drive {
     pub desc: String,
 }
 
+/// Read and parse config values from toml file.
 pub fn get_config() -> Result<Config> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "cfg.toml"]
         .iter()
