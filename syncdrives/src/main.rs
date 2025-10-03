@@ -8,7 +8,7 @@ mod gdrive;
 mod util;
 
 use config::Config;
-use util::DriveInfo;
+use util::{DestError, DriveInfo};
 
 #[derive(Parser)]
 #[command(name = "Drive Syncer")]
@@ -97,68 +97,41 @@ fn sync_drives(
     }
 
     let mut dests = Vec::new();
-    let mut drive_added: bool = false;
 
     for d in cfg.drives.iter() {
-        dests.push(DriveInfo {
-            mountpoint: d.mountpoint.trim_end_matches('/'),
-            drive: d.drive.as_str(),
-            dir: d.dir.trim_end_matches('/'),
-            desc: d.desc.as_str(),
-            err: None,
-        });
+        dests.push(DriveInfo::from_drive(&d));
     }
 
-    // Get external drive info from args
-    let (mountpoint, drive, dir, desc) = if let Some(letter) = drive_letter {
-        drive_added = true;
-        let mountpoint: String = format!("/mnt/{}", &letter);
-        let drive: String = format!("{}:", &letter.to_uppercase());
-        let dir: String = mountpoint.clone();
-
-        let desc: String = if let Some(nickname) = drive_nickname {
-            nickname
-        } else {
-            String::from("External Drive")
-        };
-
-        (mountpoint, drive, dir, desc)
-    } else {
-        (String::new(), String::new(), String::new(), String::new())
-    };
-
-    if drive_added {
+    if let Some(letter) = drive_letter {
         // Add cli-specified drive to destinations
-        dests.push(DriveInfo {
-            mountpoint: mountpoint.as_str(),
-            drive: drive.as_str(),
-            dir: dir.as_str(),
-            desc: desc.as_str(),
-            err: None,
-        });
+        dests.push(DriveInfo::new(letter, drive_nickname));
     }
 
     let base_src_dir = format!("/home/{}", user);
-    let hidden_files: Vec<String> = cfg.hidden_files.clone().unwrap_or(Vec::new());
+    let hidden_files: Vec<String> = cfg.hidden_files
+        .clone()
+        .unwrap_or(Vec::new());
 
     // Iterate destinations and try to mount their drives and sync
     // their directories with local ones
     println!("::: Syncing drives with local :::");
-    for mut dest in dests.iter_mut() {
-        if let Err(e) = util::mount_drive(&mut dest) {
-            eprintln!("{} mount error: {}", dest.desc, e);
+    for dest in dests.iter_mut() {
+        if let Err(e) = util::mount_drive(&dest) {
+            eprintln!("Error: {} - {}", dest.nickname, e);
+            dest.err = Some(DestError::MountError);
             continue;
         }
 
         if let Err(e) = util::sync_dirs_with_local(
-            &mut dest,
+            &dest,
             base_src_dir.as_str(),
             &cfg.subdirs,
             &hidden_files,
             user.as_str(),
             dry_run,
         ) {
-            eprintln!("{} sync error: {}", dest.desc, e);
+            dest.err = Some(DestError::SyncError);
+            eprintln!("Error: {} - {}", dest.nickname, e);
             eprintln!("Aborting syncs with local...");
             break;
         }
@@ -167,19 +140,19 @@ fn sync_drives(
     // If multiple destinations specified, iterate them again and
     // try to sync their synced/ directories with each other
     if dests.len() > 1 {
-        println!("\n::: Syncing between `synced` directories :::\n");
+        println!("\n::: Syncing between `synced` directories :::");
         for src in dests.iter() {
             if src.err.is_none() {
-                let src_sync_dir = format!("{}/synced/", src.dir);
+                let src_sync_dir = format!("{}/synced/", src.base_dir);
 
                 for dest in dests.iter() {
-                    let dest_sync_dir = format!("{}/synced/", dest.dir);
+                    let dest_sync_dir = format!("{}/synced/", dest.base_dir);
 
                     if dest_sync_dir != src_sync_dir {
                         if let Some(e) = dest.err {
                             println!(
                                 "Skipping {s} -> {d} sync due to {d} {err} error",
-                                s=src.desc, d=dest.desc, err=e.kind(),
+                                s=src.nickname, d=dest.nickname, err=e.kind(),
                             );
                             continue;
                         }
@@ -187,8 +160,8 @@ fn sync_drives(
                         if let Err(e) = util::sync_dir(
                             src_sync_dir.as_str(),
                             dest_sync_dir.as_str(),
-                            src.desc,
-                            dest.desc,
+                            src.nickname.as_str(),
+                            dest.nickname.as_str(),
                             dry_run,
                         ) {
                             eprintln!("Error: {}", e);
