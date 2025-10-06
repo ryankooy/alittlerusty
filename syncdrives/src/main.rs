@@ -16,6 +16,10 @@ use util::{DestError, DriveInfo};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Path of TOML config file
+    #[arg(short, long = "config", value_name = "FILE")]
+    config_file: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -24,7 +28,7 @@ enum Commands {
     /// Sync external drives with local
     Sync {
         /// System username
-        #[arg(short, long, value_name = "USER")]
+        #[arg(short, long)]
         user: String,
 
         /// Additional drive's identifying letter
@@ -45,6 +49,10 @@ enum Commands {
         /// Local path of file to upload
         #[arg(short, long)]
         file: String,
+
+        /// Google Drive API client secrets file
+        #[arg(short, long, value_name = "FILE")]
+        secrets_file: Option<String>,
     },
 }
 
@@ -53,7 +61,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Get info from config file
-    let cfg = config::get_config()?;
+    let cfg = config::get_config(cli.config_file)?;
 
     match cli.command {
         Commands::Sync {
@@ -64,9 +72,9 @@ async fn main() -> Result<()> {
         } => {
             sync_drives(&cfg, user, drive_letter, drive_nickname, dry_run)?;
         }
-        Commands::Upload { file } => {
+        Commands::Upload { file, secrets_file } => {
             if let Some(folder_id) = cfg.gd_folder_id {
-                let hub = gdrive::get_drivehub().await?;
+                let hub = gdrive::get_drivehub(secrets_file).await?;
 
                 gdrive::upload_file_to_drive(
                     &hub,

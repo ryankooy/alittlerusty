@@ -71,10 +71,12 @@ impl Drive {
 }
 
 /// Read and parse config values from toml file.
-pub fn get_config() -> Result<Config> {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "config.toml"]
-        .iter()
-        .collect();
+pub fn get_config(config_file: Option<String>) -> Result<Config> {
+    let path: PathBuf = if let Some(f) = config_file {
+        PathBuf::from(f)
+    } else {
+        [env!("CARGO_MANIFEST_DIR"), "config.toml"].iter().collect()
+    };
 
     let cfg_str = fs::read_to_string(&path)
         .with_context(|| {

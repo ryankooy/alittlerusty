@@ -43,10 +43,13 @@ impl From<InstalledApp> for ApplicationSecret {
 }
 
 /// Read and parse GD API credentials from JSON file.
-fn get_gdapi_config() -> Result<GDApiConfig> {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "client_secrets.json"]
-        .iter()
-        .collect();
+fn get_gdapi_config(secrets_file: Option<String>) -> Result<GDApiConfig> {
+    let path: PathBuf = if let Some(f) = secrets_file {
+        PathBuf::from(f)
+    } else {
+        [env!("CARGO_MANIFEST_DIR"), "client_secrets.json"].iter().collect()
+    };
+
     let cfg_content = fs::read_to_string(&path)
         .with_context(|| {
             format!("Failed to read GDApi config file {}", path.display())
@@ -58,8 +61,10 @@ fn get_gdapi_config() -> Result<GDApiConfig> {
 }
 
 /// Connect to Google Drive and return hub for accessing it.
-pub async fn get_drivehub() -> Result<DriveHub<HttpsConnector<HttpConnector>>> {
-    let config: GDApiConfig = get_gdapi_config()?;
+pub async fn get_drivehub(
+    secrets_file: Option<String>,
+) -> Result<DriveHub<HttpsConnector<HttpConnector>>> {
+    let config: GDApiConfig = get_gdapi_config(secrets_file)?;
     let secret: ApplicationSecret = config.installed.into();
 
     let auth = InstalledFlowAuthenticator::builder(
