@@ -301,9 +301,10 @@ fn read_hours(
                     entry.hours,
                 ));
             } else {
+                let hours: f64 = (entry.hours * 100.0).round() / 100.0;
                 *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
-                    .or_insert(0.0f64) += entry.hours;
-                total_hours += entry.hours;
+                    .or_insert(0.0f64) += hours;
+                total_hours += hours;
             }
         }
     }
