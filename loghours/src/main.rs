@@ -59,9 +59,9 @@ enum Commands {
         #[arg(short, long)]
         rate: Option<u32>,
 
-        /// Whether to round up a day's total hours
-        #[arg(short = 'u', long)]
-        round_up: bool,
+        /// Whether to round a day's hours to nearest quarter-hour
+        #[arg(short = 'q', long)]
+        round_quarter: bool,
 
         /// Show raw database log entries (including `id` column)
         #[arg(short = 'i', long)]
@@ -111,12 +111,12 @@ async fn main() -> Result<()> {
             start_date,
             end_date,
             rate,
-            round_up,
+            round_quarter,
             show_raw_entries,
         } => {
             read_hours(
                 file, start_date, end_date, cli.job_name,
-                rate, round_up, show_raw_entries,
+                rate, round_quarter, show_raw_entries,
             )?;
         }
         Commands::Add { date, hours } => {
@@ -263,11 +263,10 @@ fn read_hours(
     end_date: Option<String>,
     job_name: Option<String>,
     rate: Option<u32>,
-    round_up: bool,
+    round_quarter: bool,
     show_raw_entries: bool,
 ) -> Result<()> {
     let mut hours_map: BTreeMap<(String, NaiveDate), f64> = BTreeMap::new();
-    let mut total_hours: f64 = 0.0;
     let by_job: bool = job_name.is_some();
     let job: String = job_name.clone().unwrap_or(String::from("-"));
     let mut raw_entries = Vec::new();
@@ -284,7 +283,6 @@ fn read_hours(
                 {
                     *hours_map.entry((entry.job, entry.date))
                         .or_insert(0.0f64) += entry.hours;
-                    total_hours += entry.hours;
                 }
             }
         }
@@ -301,39 +299,48 @@ fn read_hours(
                     entry.hours,
                 ));
             } else {
-                let hours: f64 = (entry.hours * 100.0).round() / 100.0;
                 *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
-                    .or_insert(0.0f64) += hours;
-                total_hours += hours;
+                    .or_insert(0.0f64) += entry.hours;
             }
         }
     }
 
-    // Print summary
-    if !hours_map.is_empty() {
-        println!("JOB\t\tDATE\t\tHOURS");
-        for ((j, d), h) in hours_map.iter() {
-            if round_up {
-                println!("{}\t\t{}\t{}", j, d, h.ceil());
-            } else {
-                println!("{}\t\t{}\t{:.2}", j, d, h);
-            }
-        }
-        println!();
-
-        println!("Total hours worked: {:.2}", total_hours);
-
-        if let Some(hourly_rate) = rate {
-            let pay: f64 = (hourly_rate as f64) * total_hours;
-            println!("Gross wage: ${:.2}", pay);
-        }
-    } else if show_raw_entries {
+    if show_raw_entries {
         println!("ID\tJOB\t\tDATE\t\tHOURS");
+
         for (i, j, d, h) in raw_entries.iter() {
             println!("{}\t{}\t\t{}\t{}", i, j, d, h);
         }
     } else {
-        println!("No hours worked");
+        let mut total_hours: f64 = 0.0;
+
+        // Print summary
+        if !hours_map.is_empty() {
+            println!("JOB\t\tDATE\t\tHOURS");
+
+            for ((j, d), h) in hours_map.iter() {
+                let daily_hours: f64 = round_hours(h, round_quarter);
+
+                if daily_hours > 0.0 {
+                    total_hours += daily_hours;
+                    println!("{}\t\t{}\t{:.2}", j, d, daily_hours);
+                }
+            }
+            println!();
+
+            if total_hours > 0.0 {
+                println!("Total hours worked: {:.2}", total_hours);
+
+                if let Some(hourly_rate) = rate {
+                    let pay: f64 = (hourly_rate as f64) * total_hours;
+                    println!("Gross wage: ${:.2}", pay);
+                }
+            }
+        }
+
+        if total_hours == 0.0 {
+            println!("No hours worked");
+        }
     }
 
     Ok(())
@@ -355,4 +362,11 @@ fn import_hours(filename: String, job_name: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Round hours by nearest hundredth or quarter depending
+/// on truthiness of `round_quarter`.
+fn round_hours(hours: &f64, by_quarter: bool) -> f64 {
+    let val: f64 = if by_quarter { 4.0 } else { 100.0 };
+    (hours * val).round() / val
 }
