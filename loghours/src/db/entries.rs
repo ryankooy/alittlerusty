@@ -24,6 +24,7 @@ impl DbDate {
 pub struct DbEntry {
     pub id: i32,
     pub job: String,
+    pub work_type: Option<String>,
     pub date: DbDate,
     pub hours: f64,
 }
@@ -73,7 +74,7 @@ fn get_entries_by_sdate_and_edate(
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE date >= @sdate AND date < @edate
                 AND job LIKE @job
             ORDER BY date",
@@ -89,7 +90,7 @@ fn get_entries_by_sdate_and_edate(
         .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE date >= @sdate AND date < @edate
             ORDER BY date",
         )?
@@ -111,7 +112,7 @@ fn get_entries_by_sdate(
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
              WHERE date >= @sdate AND job LIKE @job
              ORDER BY date",
          )?
@@ -122,7 +123,7 @@ fn get_entries_by_sdate(
         .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE date >= @sdate ORDER BY date",
         )?
         .query_map(
@@ -140,7 +141,7 @@ fn get_entries_by_edate(
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE date < @edate AND job LIKE @job
             ORDER BY date",
         )?
@@ -151,7 +152,7 @@ fn get_entries_by_edate(
         .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE date < @edate ORDER BY date",
         )?
         .query_map(
@@ -168,14 +169,14 @@ fn get_all_entries(
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry
+            "SELECT id, job, work_type, date, hours FROM entry
             WHERE job LIKE @job ORDER BY date",
         )?
         .query_map(named_params! { "@job": job }, |row| make_entry(row))?
         .collect::<Result<Vec<DbEntry>>>()
     } else {
         conn.prepare(
-            "SELECT id, job, date, hours FROM entry ORDER BY date",
+            "SELECT id, job, work_type, date, hours FROM entry ORDER BY date",
         )?
         .query_map([], |row| make_entry(row))?
         .collect::<Result<Vec<DbEntry>>>()
@@ -186,8 +187,9 @@ fn make_entry(row: &Row) -> Result<DbEntry> {
     Ok(DbEntry {
         id: row.get(0)?,
         job: row.get(1)?,
-        date: row.get(2)?,
-        hours: row.get(3)?,
+        work_type: row.get(2)?,
+        date: row.get(3)?,
+        hours: row.get(4)?,
     })
 }
 
@@ -197,6 +199,7 @@ pub fn add_entry(
     date: NaiveDate,
     hours: f64,
     job: String,
+    work_type: Option<String>,
 ) -> anyhow::Result<()> {
     let conn = match connection {
         None => &mut create_conn()?,
@@ -204,10 +207,11 @@ pub fn add_entry(
     };
 
     conn.execute(
-        "INSERT OR IGNORE INTO entry (job, date, hours)
-            VALUES (@job, @date, @hours)",
+        "INSERT OR IGNORE INTO entry (job, work_type, date, hours)
+            VALUES (@job, @work_type, @date, @hours)",
         named_params! {
             "@job": job,
+            "@work_type": work_type,
             "@date": DbDate(date),
             "@hours": hours,
         },

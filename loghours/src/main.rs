@@ -23,12 +23,15 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Nickname of job/company for which hours worked
+    /// Nickname for job/company for which hours worked
     ///
-    /// Note that this field is required for `add`
-    /// and `remove` commands
+    /// Note that this field is required for `log` and `add` commands
     #[arg(short = 'n', long, value_name = "NICKNAME")]
     job_name: Option<String>,
+
+    /// Nickname for type of work
+    #[arg(short = 't', long, value_name = "WORKTYPE")]
+    work_type: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -36,6 +39,7 @@ struct Cli {
 enum Commands {
     /// Log hours worked to file
     Log {
+        /// Optional
         /// Optional path of file to which to write hours
         #[arg(short, long, value_name = "FILE")]
         outfile: Option<String>,
@@ -101,7 +105,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Log { outfile } => {
             if !(outfile.is_none() && cli.job_name.is_none()) {
-                log_hours(outfile, cli.job_name).await?;
+                log_hours(outfile, cli.job_name, cli.work_type).await?;
             } else {
                 bail!("Job name required when logging hours to database");
             }
@@ -122,7 +126,7 @@ async fn main() -> Result<()> {
         Commands::Add { date, hours } => {
             if let Some(job_name) = cli.job_name {
                 let d = NaiveDate::parse_from_str(date.as_str(), DATE_FMT_STR)?;
-                db::add_entry(None, d, hours, job_name)?;
+                db::add_entry(None, d, hours, job_name, cli.work_type)?;
             } else {
                 bail!("Job name required for `add` operation");
             }
@@ -138,6 +142,7 @@ async fn main() -> Result<()> {
 async fn log_hours(
     filename: Option<String>,
     job_name: Option<String>,
+    work_type: Option<String>,
 ) -> Result<()> {
     use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
@@ -241,7 +246,7 @@ async fn log_hours(
         } else if let Some(job) = job_name {
             // Log hours to database
             let today = Local::now().date_naive();
-            db::add_entry(None, today, hours, job)?;
+            db::add_entry(None, today, hours, job, work_type)?;
         }
     } else {
         writeln!(stdout.0, "No hours logged")?;
@@ -266,7 +271,7 @@ fn read_hours(
     round_quarter: bool,
     show_raw_entries: bool,
 ) -> Result<()> {
-    let mut hours_map: BTreeMap<(String, NaiveDate), f64> = BTreeMap::new();
+    let mut hours_map: BTreeMap<(String, String, NaiveDate), f64> = BTreeMap::new();
     let by_job: bool = job_name.is_some();
     let job: String = job_name.clone().unwrap_or(String::from("-"));
     let mut raw_entries = Vec::new();
@@ -281,7 +286,7 @@ fn read_hours(
                 if !(by_job && entry.job != job) &&
                     util::within_date_range(entry.date, sdate, edate)
                 {
-                    *hours_map.entry((entry.job, entry.date))
+                    *hours_map.entry((entry.job, String::from("-"), entry.date))
                         .or_insert(0.0f64) += entry.hours;
                 }
             }
@@ -295,35 +300,40 @@ fn read_hours(
                 raw_entries.push((
                     entry.id,
                     entry.job.clone(),
+                    entry.work_type.clone().unwrap_or(String::from("-")),
                     entry.date.date_naive(),
                     entry.hours,
                 ));
             } else {
-                *hours_map.entry((entry.job.clone(), entry.date.date_naive()))
-                    .or_insert(0.0f64) += entry.hours;
+                *hours_map.entry((
+                    entry.job.clone(),
+                    entry.work_type.clone().unwrap_or(String::from("-")),
+                    entry.date.date_naive(),
+                ))
+                .or_insert(0.0f64) += entry.hours;
             }
         }
     }
 
     if show_raw_entries {
-        println!("ID\tJOB\t\tDATE\t\tHOURS");
+        println!("ID\tJOB\tTYPE\tDATE\t\tHOURS");
 
-        for (i, j, d, h) in raw_entries.iter() {
-            println!("{}\t{}\t\t{}\t{}", i, j, d, h);
+        for (i, j, t, d, h) in raw_entries.iter() {
+            println!("{}\t{}\t{}\t{}\t{}", i, j, t, d, h);
         }
     } else {
         let mut total_hours: f64 = 0.0;
 
         // Print summary
         if !hours_map.is_empty() {
-            println!("JOB\t\tDATE\t\tHOURS");
+            println!("JOB\tTYPE\tDATE\t\tHOURS");
 
-            for ((j, d), h) in hours_map.iter() {
+            for ((j, t, d), h) in hours_map.iter() {
                 let daily_hours: f64 = round_hours(h, round_quarter);
 
                 if daily_hours > 0.0 {
                     total_hours += daily_hours;
-                    println!("{}\t\t{}\t{:.2}", j, d, daily_hours);
+                    println!("{}\t{}\t{}\t{:.2}", j, t, d, daily_hours);
                 }
             }
             println!();
@@ -356,7 +366,7 @@ fn import_hours(filename: String, job_name: Option<String>) -> Result<()> {
         if let Some(entry) = util::entry_from_line(line, DATE_FMT_STR)? {
             if !(by_job && entry.job != job) {
                 println!("Importing entry ({} {} {})", entry.job, entry.date, entry.hours);
-                db::add_entry(Some(&mut conn), entry.date, entry.hours, entry.job)?;
+                db::add_entry(Some(&mut conn), entry.date, entry.hours, entry.job, None)?;
             }
         }
     }
