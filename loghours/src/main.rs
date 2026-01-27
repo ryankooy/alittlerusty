@@ -25,11 +25,13 @@ struct Cli {
 
     /// Nickname for job/company for which hours worked
     ///
-    /// Note that this field is required for `log` and `add` commands
+    /// Required for `log` and `add` commands
     #[arg(short = 'n', long, value_name = "NICKNAME")]
     job_name: Option<String>,
 
     /// Nickname for type of work
+    ///
+    /// Ignored if writing hours to file
     #[arg(short = 't', long, value_name = "WORKTYPE")]
     work_type: Option<String>,
 }
@@ -271,7 +273,9 @@ fn read_hours(
     round_quarter: bool,
     show_raw_entries: bool,
 ) -> Result<()> {
-    let mut hours_map: BTreeMap<(String, String, NaiveDate), f64> = BTreeMap::new();
+    // Hours map key format: (idx, job, work_type, date)
+    let mut hours_map: BTreeMap<(i32, String, String, NaiveDate), f64> = BTreeMap::new();
+
     let by_job: bool = job_name.is_some();
     let job: String = job_name.clone().unwrap_or(String::from("-"));
     let mut raw_entries = Vec::new();
@@ -286,7 +290,10 @@ fn read_hours(
                 if !(by_job && entry.job != job) &&
                     util::within_date_range(entry.date, sdate, edate)
                 {
-                    *hours_map.entry((entry.job, String::from("-"), entry.date))
+                    // For each entry key's index and work type, use the dummy
+                    // values 1 and "-", respectively, since entries in files
+                    // don't have either column
+                    *hours_map.entry((1, entry.job, String::from("-"), entry.date))
                         .or_insert(0.0f64) += entry.hours;
                 }
             }
@@ -306,6 +313,7 @@ fn read_hours(
                 ));
             } else {
                 *hours_map.entry((
+                    entry.idx,
                     entry.job.clone(),
                     entry.work_type.clone().unwrap_or(String::from("-")),
                     entry.date.date_naive(),
@@ -328,7 +336,7 @@ fn read_hours(
         if !hours_map.is_empty() {
             println!("JOB\tTYPE\tDATE\t\tHOURS");
 
-            for ((j, t, d), h) in hours_map.iter() {
+            for ((_, j, t, d), h) in hours_map.iter() {
                 let daily_hours: f64 = round_hours(h, round_quarter);
 
                 if daily_hours > 0.0 {

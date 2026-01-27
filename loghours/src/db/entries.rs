@@ -9,6 +9,19 @@ use rusqlite::{
 
 use crate::db::conn::create_conn;
 
+/// This SELECT statement includes the row number as column
+/// `idx` to ensure that entries remain sorted by date.
+const SELECT_STATEMENT: &'static str = r#"
+SELECT ROW_NUMBER() OVER(ORDER BY date) AS idx,
+    id, job, work_type, date, hours
+FROM entry
+"#;
+
+const SDATE_CLAUSE: &'static str = "date >= @sdate";
+const EDATE_CLAUSE: &'static str = "date < @edate";
+const JOB_CLAUSE: &'static str = "job LIKE @job";
+const ORDER_BY: &'static str = "ORDER BY date";
+
 #[derive(Clone, Debug)]
 pub struct DbDate(pub NaiveDate);
 
@@ -22,6 +35,7 @@ impl DbDate {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct DbEntry {
+    pub idx: i32,
     pub id: i32,
     pub job: String,
     pub work_type: Option<String>,
@@ -73,35 +87,43 @@ fn get_entries_by_sdate_and_edate(
     job_name: Option<String>,
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE date >= @sdate AND date < @edate
-                AND job LIKE @job
-            ORDER BY date",
-        )?
-        .query_map(
-            named_params! {
-                "@sdate": DbDate(sdate),
-                "@edate": DbDate(edate),
-                "@job": job,
-            },
-            |row| make_entry(row),
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} AND {} AND {} {}",
+            SELECT_STATEMENT,
+            SDATE_CLAUSE,
+            EDATE_CLAUSE,
+            JOB_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! {
+                    "@sdate": DbDate(sdate),
+                    "@edate": DbDate(edate),
+                    "@job": job,
+                },
+                |row| make_entry(row),
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     } else {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE date >= @sdate AND date < @edate
-            ORDER BY date",
-        )?
-        .query_map(
-            named_params! {
-                "@sdate": DbDate(sdate),
-                "@edate": DbDate(edate),
-            },
-            |row| make_entry(row),
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} AND {} {}",
+            SELECT_STATEMENT,
+            SDATE_CLAUSE,
+            EDATE_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! {
+                    "@sdate": DbDate(sdate),
+                    "@edate": DbDate(edate),
+                },
+                |row| make_entry(row),
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
@@ -111,26 +133,34 @@ fn get_entries_by_sdate(
     job_name: Option<String>,
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-             WHERE date >= @sdate AND job LIKE @job
-             ORDER BY date",
-         )?
-        .query_map(
-            named_params! { "@sdate": DbDate(sdate), "@job": job },
-            |row| make_entry(row)
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} AND {} {}",
+            SELECT_STATEMENT,
+            SDATE_CLAUSE,
+            JOB_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! { "@sdate": DbDate(sdate), "@job": job },
+                |row| make_entry(row)
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     } else {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE date >= @sdate ORDER BY date",
-        )?
-        .query_map(
-            named_params! { "@sdate": DbDate(sdate) },
-            |row| make_entry(row)
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} {}",
+            SELECT_STATEMENT,
+            SDATE_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! { "@sdate": DbDate(sdate) },
+                |row| make_entry(row)
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
@@ -140,26 +170,34 @@ fn get_entries_by_edate(
     job_name: Option<String>,
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE date < @edate AND job LIKE @job
-            ORDER BY date",
-        )?
-        .query_map(
-            named_params! { "@edate": DbDate(edate), "@job": job },
-            |row| make_entry(row)
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} AND {} {}",
+            SELECT_STATEMENT,
+            EDATE_CLAUSE,
+            JOB_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! { "@edate": DbDate(edate), "@job": job },
+                |row| make_entry(row)
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     } else {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE date < @edate ORDER BY date",
-        )?
-        .query_map(
-            named_params! { "@edate": DbDate(edate) },
-            |row| make_entry(row)
-        )?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} {}",
+            SELECT_STATEMENT,
+            EDATE_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(
+                named_params! { "@edate": DbDate(edate) },
+                |row| make_entry(row)
+            )?
+            .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
@@ -168,28 +206,33 @@ fn get_all_entries(
     job_name: Option<String>,
 ) -> Result<Vec<DbEntry>> {
     if let Some(job) = job_name {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry
-            WHERE job LIKE @job ORDER BY date",
-        )?
-        .query_map(named_params! { "@job": job }, |row| make_entry(row))?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!(
+            "{} WHERE {} {}",
+            SELECT_STATEMENT,
+            JOB_CLAUSE,
+            ORDER_BY,
+        );
+
+        conn.prepare(&query)?
+            .query_map(named_params! { "@job": job }, |row| make_entry(row))?
+            .collect::<Result<Vec<DbEntry>>>()
     } else {
-        conn.prepare(
-            "SELECT id, job, work_type, date, hours FROM entry ORDER BY date",
-        )?
-        .query_map([], |row| make_entry(row))?
-        .collect::<Result<Vec<DbEntry>>>()
+        let query = format!("{} {}", SELECT_STATEMENT, ORDER_BY);
+
+        conn.prepare(&query)?
+            .query_map([], |row| make_entry(row))?
+            .collect::<Result<Vec<DbEntry>>>()
     }
 }
 
 fn make_entry(row: &Row) -> Result<DbEntry> {
     Ok(DbEntry {
-        id: row.get(0)?,
-        job: row.get(1)?,
-        work_type: row.get(2)?,
-        date: row.get(3)?,
-        hours: row.get(4)?,
+        idx: row.get(0)?,
+        id: row.get(1)?,
+        job: row.get(2)?,
+        work_type: row.get(3)?,
+        date: row.get(4)?,
+        hours: row.get(5)?,
     })
 }
 
