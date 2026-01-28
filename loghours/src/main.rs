@@ -1,6 +1,6 @@
 //! Hours Logger
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Write};
 use anyhow::{bail, Result};
 use chrono::{Local, NaiveDate};
@@ -273,7 +273,7 @@ fn read_hours(
     round_quarter: bool,
     show_raw_entries: bool,
 ) -> Result<()> {
-    // Hours map key format: (idx, job, work_type, date)
+    // Hours map format: (idx, job, work_type, date) => hours
     let mut hours_map: BTreeMap<(i32, String, String, NaiveDate), f64> = BTreeMap::new();
 
     let by_job: bool = job_name.is_some();
@@ -299,11 +299,15 @@ fn read_hours(
             }
         }
     } else {
-        // Read hours from database
-        let entries = db::get_entries_by_date_range(sdate, edate, job_name)?;
+        // Index map format: (job, work_type, date) => idx
+        let mut index_map: HashMap<(String, String, NaiveDate), i32> = HashMap::new();
 
-        for entry in entries.iter() {
+        // Read hours from database
+        for entry in db::get_entries_by_date_range(sdate, edate, job_name)?
+            .iter()
+        {
             if show_raw_entries {
+                // Add raw entry
                 raw_entries.push((
                     entry.id,
                     entry.job.clone(),
@@ -312,13 +316,23 @@ fn read_hours(
                     entry.hours,
                 ));
             } else {
-                *hours_map.entry((
-                    entry.idx,
-                    entry.job.clone(),
-                    entry.work_type.clone().unwrap_or(String::from("-")),
-                    entry.date.date_naive(),
+                let job_key: String = entry.job.clone();
+                let work_type_key: String = entry.work_type
+                    .clone()
+                    .unwrap_or(String::from("-"));
+                let date_key: NaiveDate = entry.date.date_naive();
+
+                // Get index for entry sort order
+                let idx: i32 = *index_map.entry((
+                    job_key.to_owned(),
+                    work_type_key.to_owned(),
+                    date_key,
                 ))
-                .or_insert(0.0f64) += entry.hours;
+                .or_insert(entry.idx);
+
+                // Update hours map
+                *hours_map.entry((idx, job_key, work_type_key, date_key))
+                    .or_insert(0.0f64) += entry.hours;
             }
         }
     }
@@ -326,26 +340,34 @@ fn read_hours(
     if show_raw_entries {
         println!("ID\tJOB\tTYPE\tDATE\t\tHOURS");
 
+        // Print raw entries
         for (i, j, t, d, h) in raw_entries.iter() {
-            println!("{}\t{}\t{}\t{}\t{}", i, j, t, d, h);
+            println!(
+                "{id}\t{job}\t{typ}\t{date}\t{hours}",
+                id=i, job=j, typ=t, date=d, hours=h,
+            );
         }
     } else {
         let mut total_hours: f64 = 0.0;
 
-        // Print summary
         if !hours_map.is_empty() {
             println!("JOB\tTYPE\tDATE\t\tHOURS");
 
+            // Print entries
             for ((_, j, t, d), h) in hours_map.iter() {
                 let daily_hours: f64 = round_hours(h, round_quarter);
 
                 if daily_hours > 0.0 {
                     total_hours += daily_hours;
-                    println!("{}\t{}\t{}\t{:.2}", j, t, d, daily_hours);
+                    println!(
+                        "{job}\t{typ}\t{date}\t{hours:.2}",
+                        job=j, typ=t, date=d, hours=daily_hours,
+                    );
                 }
             }
             println!();
 
+            // Print total hours worked
             if total_hours > 0.0 {
                 println!("Total hours worked: {:.2}", total_hours);
 
@@ -364,7 +386,7 @@ fn read_hours(
     Ok(())
 }
 
-/// Import entries from file into database
+/// Import entries from file into database.
 fn import_hours(filename: String, job_name: Option<String>) -> Result<()> {
     let mut conn = db::create_conn()?;
     let by_job: bool = job_name.is_some();
@@ -373,8 +395,18 @@ fn import_hours(filename: String, job_name: Option<String>) -> Result<()> {
     for line in util::read_lines(&filename)?.map_while(Result::ok) {
         if let Some(entry) = util::entry_from_line(line, DATE_FMT_STR)? {
             if !(by_job && entry.job != job) {
-                println!("Importing entry ({} {} {})", entry.job, entry.date, entry.hours);
-                db::add_entry(Some(&mut conn), entry.date, entry.hours, entry.job, None)?;
+                println!(
+                    "Importing entry ({} {} {})",
+                    entry.job, entry.date, entry.hours,
+                );
+
+                db::add_entry(
+                    Some(&mut conn),
+                    entry.date,
+                    entry.hours,
+                    entry.job,
+                    None,
+                )?;
             }
         }
     }
